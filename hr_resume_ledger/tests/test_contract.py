@@ -63,4 +63,7 @@ def test_frontend_prefers_pdf_preview():
     assert "/api/candidate-pdf?id=" in html
     assert "预览PDF简历" in html
     assert "PDF：${c.has_pdf?'已保存':'未生成'}" in html
+    assert "preview-grid" in html
+    assert "renderResumePreview" in html
+    assert "工作经历" in html and "教育经历" in html
 
