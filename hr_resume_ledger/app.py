@@ -58,7 +58,7 @@ PLATFORMS = {
 }
 EXPORT_FIELDS = [
     "姓名", "电话", "工作经历匹配度", "匹配说明", "相关经历",
-    "年龄", "性别", "学历", "求职状态", "微信", "邮箱", "个人基本资料",
+    "年龄", "性别", "学历", "求职状态", "微信", "邮箱", "个人基本资料", "沟通回溯",
 ]
 XLSX_FIELDS = ["跟进状态", "优先级", "最近跟进时间", "跟进人", "备注"] + EXPORT_FIELDS
 
@@ -170,6 +170,23 @@ def extract_contacts(text):
         "email": emails[0] if emails else "",
         "wechat": wm.group(1) if wm else "",
     }
+
+
+def extract_contacts_from_pdf(path):
+    p = Path(path or "")
+    if not p.exists():
+        return {"phone": "", "email": "", "wechat": ""}
+    text = ""
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(str(p))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages[:8])
+    except Exception:
+        try:
+            text = p.read_bytes().decode("utf-8", "ignore") + "\n" + p.read_bytes().decode("latin1", "ignore")
+        except Exception:
+            text = ""
+    return extract_contacts(text)
 
 
 def extract_profile_info(text):
@@ -1026,6 +1043,10 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
                     pdf = zhaopin_export_current_pdf(ws, prospective)
                     if pdf.get("ok"):
                         detail["local_pdf_path"] = pdf.get("path", "")
+                        pdf_contacts = extract_contacts_from_pdf(pdf.get("path", ""))
+                        for k in ["phone", "email", "wechat"]:
+                            if pdf_contacts.get(k) and not detail.get(k):
+                                detail[k] = pdf_contacts[k]
                     else:
                         detail["pdf_error"] = pdf.get("error", "")
                 except Exception as e:
@@ -1219,8 +1240,9 @@ def generate_candidate_pdf(cid):
         ws.close()
     if not pdf.get("ok"):
         raise RuntimeError(pdf.get("error") or "PDF 生成失败")
+    contacts = extract_contacts_from_pdf(pdf["path"])
     with sqlite3.connect(DB_PATH) as con:
-        con.execute("UPDATE candidates SET local_pdf_path=?, resume_key=COALESCE(NULLIF(resume_key,''), ?) WHERE id=?", (pdf["path"], extract_resume_key(source_url), int(cid)))
+        con.execute("UPDATE candidates SET local_pdf_path=?, resume_key=COALESCE(NULLIF(resume_key,''), ?), phone=COALESCE(NULLIF(?,''), phone), email=COALESCE(NULLIF(?,''), email), wechat=COALESCE(NULLIF(?,''), wechat) WHERE id=?", (pdf["path"], extract_resume_key(source_url), contacts.get("phone", ""), contacts.get("email", ""), contacts.get("wechat", ""), int(cid)))
     return {"ok": True, "id": int(cid), "local_pdf_path": pdf["path"]}
 
 
@@ -1280,6 +1302,11 @@ def build_display_row(row):
     if not d.get("resume_key"):
         d["resume_key"] = extract_resume_key(d.get("source_url", ""))
     d["resume"] = dedupe_resume_text(d.get("resume", ""))
+    if d.get("local_pdf_path") and not (d.get("phone") or d.get("email") or d.get("wechat")):
+        pdf_contacts = extract_contacts_from_pdf(d.get("local_pdf_path", ""))
+        for k in ["phone", "email", "wechat"]:
+            if pdf_contacts.get(k):
+                d[k] = pdf_contacts[k]
     matched = limit_lines(row.get("matched_experience", "") or "", 5)
     summary_src = row.get("basic_info", "") or row.get("resume", "")
     d["profile_summary"] = compose_profile_summary(summary_src, matched, row)
@@ -1304,6 +1331,17 @@ def build_export_row(row):
     resume = row.get("resume", "") or ""
     matched = limit_lines(row.get("matched_experience", "") or "", 5)
     summary = row.get("basic_info", "") or "\n".join([x for x in clean_lines(resume) if x not in clean_lines(matched)][:10])
+    backtrack = []
+    if row.get("phone"):
+        backtrack.append("电话：" + row.get("phone", ""))
+    if row.get("wechat"):
+        backtrack.append("微信：" + row.get("wechat", ""))
+    if row.get("email"):
+        backtrack.append("邮箱：" + row.get("email", ""))
+    if row.get("local_pdf_path"):
+        backtrack.append("PDF：" + row.get("local_pdf_path", ""))
+    if row.get("source_url"):
+        backtrack.append("智联原简历：" + row.get("source_url", ""))
     return {
         "姓名": row.get("name", "") or "未识别",
         "电话": csv_phone_text(row.get("phone", "")),
@@ -1317,6 +1355,7 @@ def build_export_row(row):
         "微信": row.get("wechat", ""),
         "邮箱": row.get("email", ""),
         "个人基本资料": compose_profile_summary(summary, matched, row),
+        "沟通回溯": "\n".join(backtrack) or "暂无联系方式；可先补生成 PDF 或打开原简历回溯",
     }
 
 

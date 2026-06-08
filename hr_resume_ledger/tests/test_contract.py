@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,7 +23,7 @@ def test_extract_candidate_required_fields_only_contract():
 def test_export_fields_are_minimal():
     assert app.EXPORT_FIELDS == [
         "姓名", "电话", "工作经历匹配度", "匹配说明", "相关经历",
-        "年龄", "性别", "学历", "求职状态", "微信", "邮箱", "个人基本资料",
+        "年龄", "性别", "学历", "求职状态", "微信", "邮箱", "个人基本资料", "沟通回溯",
     ]
 
 
@@ -118,3 +118,11 @@ def test_frontend_prefers_pdf_preview():
     assert "generatePdf" in html
     assert "dedupeCandidates" in html
 
+
+
+def test_pdf_contact_binary_fallback(tmp_path):
+    pdf = tmp_path / "x.pdf"
+    pdf.write_bytes(b"%PDF-1.4 phone 13800138000 email a@example.com")
+    c = app.extract_contacts_from_pdf(pdf)
+    assert c["phone"] == "13800138000"
+    assert c["email"] == "a@example.com"

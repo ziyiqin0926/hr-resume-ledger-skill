@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,5 +33,5 @@ def test_filter_by_requirements_positive_and_negative():
 def test_export_fields_are_precise():
     assert app.EXPORT_FIELDS == [
         "姓名", "电话", "工作经历匹配度", "匹配说明", "相关经历",
-        "年龄", "性别", "学历", "求职状态", "微信", "邮箱", "个人基本资料",
+        "年龄", "性别", "学历", "求职状态", "微信", "邮箱", "个人基本资料", "沟通回溯",
     ]
