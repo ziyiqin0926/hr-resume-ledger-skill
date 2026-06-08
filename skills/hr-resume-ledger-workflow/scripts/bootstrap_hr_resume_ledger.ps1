@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $appDir = Join-Path $ProjectDir "hr_resume_ledger"
 $app = Join-Path $appDir "app.py"
 if (-not (Test-Path $app)) {
-  throw "未找到 hr_resume_ledger\app.py，请用 -ProjectDir 指向项目根目录。"
+  throw "Cannot find hr_resume_ledger\app.py. Use -ProjectDir to point to the project root that contains hr_resume_ledger."
 }
 
 $health = "http://127.0.0.1:$Port/api/health"
@@ -40,4 +40,4 @@ if ($chrome) {
   Start-Process "chrome.exe" $url
 }
 
-Write-Host "HR 简历台账已打开：$url"
+Write-Host "HR resume ledger opened: $url"
