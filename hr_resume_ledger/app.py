@@ -121,6 +121,30 @@ def clean_lines(text):
     return [x.strip() for x in re.split(r"[\r\n]+", text or "") if x.strip()]
 
 
+def normalize_resume_line(line):
+    return re.sub(r"\s+", "", re.sub(r"[，。；;,.、:：()\[\]（）【】\-—_]", "", line or "")).lower()
+
+
+def dedupe_resume_text(text):
+    lines = clean_lines(text)
+    out, seen_long, last_key = [], set(), ""
+    noise = ["资质公示", "法律协议", "版权所有", "举报电话", "监督电话", "存至本地", "保存到本地", "文件格式", "微信转给同事", "打电话", "打招呼"]
+    for line in lines:
+        if any(n in line for n in noise):
+            continue
+        key = normalize_resume_line(line)
+        if not key or key == last_key:
+            continue
+        is_long = len(key) >= 12 or bool(re.search(r"20\d{2}|19\d{2}|负责|项目|公司|设计|销售|护理|医疗|运营|管理", line))
+        if is_long and key in seen_long:
+            continue
+        if is_long:
+            seen_long.add(key)
+        out.append(line)
+        last_key = key
+    return "\n".join(out)
+
+
 def split_keywords(text):
     return [x.strip() for x in re.split(r"[,，、;；\s]+", text or "") if x.strip()]
 
@@ -301,6 +325,7 @@ def extract_candidate(payload, job_keywords=""):
     hit_exp = matched_experience(text, job_keywords)
     suitable = bool(phone) and (True if not terms else bool(hit_exp))
     education = extract_education(compact)
+    resume_clean = dedupe_resume_text(text)[:60000]
     return {
         "name": guess_name(lines, title),
         "phone": phone,
@@ -313,7 +338,7 @@ def extract_candidate(payload, job_keywords=""):
         "basic_info": profile["basic_info"],
         "education": education,
         "matched_experience": hit_exp,
-        "resume": text[:60000],
+        "resume": resume_clean,
         "raw_text": text[:60000],
         "source_url": url,
         "resume_key": extract_resume_key(url),
@@ -387,7 +412,7 @@ def extract_recommendation_cards(text, job_keywords=""):
             "basic_info": profile["basic_info"],
             "job_desc": job_desc,
             "matched_experience": hit,
-            "resume": block[:60000],
+            "resume": dedupe_resume_text(block)[:60000],
             "raw_text": block[:60000],
             "source_url": "",
             "source_title": "推荐页列表",
@@ -1254,6 +1279,7 @@ def build_display_row(row):
     d = dict(row)
     if not d.get("resume_key"):
         d["resume_key"] = extract_resume_key(d.get("source_url", ""))
+    d["resume"] = dedupe_resume_text(d.get("resume", ""))
     matched = limit_lines(row.get("matched_experience", "") or "", 5)
     summary_src = row.get("basic_info", "") or row.get("resume", "")
     d["profile_summary"] = compose_profile_summary(summary_src, matched, row)

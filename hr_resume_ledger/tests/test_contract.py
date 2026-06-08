@@ -98,6 +98,13 @@ def test_related_experience_enters_ledger_for_review():
     assert "待复核" in row["reason"]
 
 
+def test_resume_text_dedupes_repeated_paragraphs():
+    text = "工作经历\nA公司\n负责建筑方案设计\n负责建筑方案设计\n教育经历\nA公司\n负责建筑方案设计"
+    cleaned = app.dedupe_resume_text(text)
+    assert cleaned.count("负责建筑方案设计") == 1
+    assert "工作经历" in cleaned
+
+
 def test_frontend_prefers_pdf_preview():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     assert "/api/candidate-pdf?id=" in html
