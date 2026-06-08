@@ -70,13 +70,15 @@ def test_save_candidate_dedupes_by_resume_key_without_phone(tmp_path, monkeypatc
     assert rows[0]["resume_key"] == "J1|R1"
 
 
-def test_same_resume_key_with_different_person_is_not_collapsed(tmp_path, monkeypatch):
+def test_same_resume_key_is_strictly_deduped(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "DB_PATH", tmp_path / "x.sqlite3")
     app.init_db()
     url = "https://rd6.zhaopin.com/app/recommend?jobNumber=J1&resumeNumber=R1"
     app.save_candidate({"name": "张先生", "age": "22", "resume": "简历A", "source_url": url})
     app.save_candidate({"name": "李女士", "age": "33", "resume": "简历B", "source_url": url})
-    assert len(app.list_candidates()) == 2
+    rows = app.list_candidates()
+    assert len(rows) == 1
+    assert rows[0]["name"] == "李女士"
 
 
 def test_frontend_prefers_pdf_preview():

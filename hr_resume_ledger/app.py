@@ -887,6 +887,54 @@ def click_candidate_by_name(ws, name, occurrence=0):
         return {"ok": False, "error": str(e)}
 
 
+def click_candidate_card(ws, candidate):
+    payload = json.dumps({
+        "name": candidate.get("name", ""),
+        "age": candidate.get("age", ""),
+        "education": candidate.get("education", ""),
+        "status": candidate.get("status", ""),
+        "job_desc": candidate.get("job_desc", ""),
+        "matched": clean_lines(candidate.get("matched_experience", ""))[:3],
+    }, ensure_ascii=False)
+    expression = f"""
+(() => {{
+  const c = {payload};
+  const must = [c.name].filter(Boolean);
+  const keys = [c.age && c.age + '岁', c.education, c.status, c.job_desc, ...(c.matched || [])].filter(Boolean);
+  const nodes = Array.from(document.querySelectorAll('a[href],button,[role=button],li,section,div'))
+    .map(el => {{
+      const t = (el.innerText || el.textContent || '').trim();
+      const r = el.getBoundingClientRect();
+      const score = (must.every(k => t.includes(k)) ? 3 : -99) + keys.reduce((n,k) => n + (t.includes(k) ? 1 : 0), 0);
+      return {{el,t,r,score}};
+    }})
+    .filter(x => x.score >= 5 && x.t.length < 1800 && x.r.width > 80 && x.r.height > 40)
+    .sort((a,b) => b.score - a.score || a.t.length - b.t.length || a.r.top - b.r.top);
+  const picked = nodes[0];
+  if (!picked) return JSON.stringify({{ok:false, reason:'未找到字段匹配的候选人卡片'}});
+  const target = picked.el.closest('a[href],button,[role=button]') || picked.el.querySelector('a[href],button,[role=button]') || picked.el;
+  target.scrollIntoView({{block:'center'}});
+  target.click();
+  return JSON.stringify({{ok:true, score:picked.score, text:picked.t.slice(0,180)}});
+}})()
+"""
+    try:
+        return json.loads(eval_page(ws, expression) or "{}")
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def detail_matches_card(card, detail):
+    checks = []
+    if card.get("age") and detail.get("age"):
+        checks.append(card.get("age") == detail.get("age"))
+    if card.get("education") and detail.get("education"):
+        checks.append(card.get("education") == detail.get("education"))
+    if card.get("status") and detail.get("status"):
+        checks.append(card.get("status") == detail.get("status"))
+    return not checks or sum(1 for x in checks if x) >= max(1, len(checks) - 1)
+
+
 def merge_card_detail(card, detail):
     if not detail:
         row = dict(card)
@@ -922,11 +970,15 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
         if href:
             ws.call("Page.navigate", {"url": href}, timeout=5)
         else:
-            clicked = click_candidate_by_name(ws, candidate.get("name", ""), candidate.get("name_occurrence", 0))
+            clicked = click_candidate_card(ws, candidate)
+            if not clicked.get("ok"):
+                clicked = click_candidate_by_name(ws, candidate.get("name", ""), candidate.get("name_occurrence", 0))
             if not clicked.get("ok"):
                 return None, clicked.get("error") or "未找到可点击的候选人卡片"
         page = wait_page_changed(ws, start_url, start_text)
         detail = extract_candidate(page, job_keywords)
+        if not detail_matches_card(candidate, detail):
+            return None, f"详情页疑似打开到其他候选人：卡片 {candidate.get('name','')} {candidate.get('age','')}岁 {candidate.get('education','')}，详情 {detail.get('name','')} {detail.get('age','')}岁 {detail.get('education','')}"
         detail["source_url"] = page.get("url", "")
         detail["source_title"] = page.get("title", "")
         detail["resume_key"] = extract_resume_key(page.get("url", ""))
@@ -980,7 +1032,7 @@ def save_candidate(candidate):
                 con.execute("UPDATE candidates SET name=?, phone=?, email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=?, resume_key=COALESCE(NULLIF(?,''), resume_key), local_pdf_path=COALESCE(NULLIF(?,''), local_pdf_path) WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, resume_key, local_pdf_path, row[0]))
                 return row[0]
         if resume_key:
-            row = con.execute("SELECT id,name,age FROM candidates WHERE resume_key=? AND (name=? OR age=? OR name='' OR age='') LIMIT 1", (resume_key, name, age)).fetchone()
+            row = con.execute("SELECT id FROM candidates WHERE resume_key=? LIMIT 1", (resume_key,)).fetchone()
             if row:
                 con.execute("UPDATE candidates SET name=?, phone=COALESCE(NULLIF(?,''), phone), email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=?, local_pdf_path=COALESCE(NULLIF(?,''), local_pdf_path) WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, local_pdf_path, row[0]))
                 return row[0]
@@ -1131,7 +1183,7 @@ def dedupe_candidates():
     rows = list_candidates()
     seen, delete_ids = set(), []
     for r in rows:
-        key = r.get("phone") or ("|".join([r.get("resume_key", ""), r.get("name", ""), r.get("age", "")]) if r.get("resume_key") else "") or "|".join([r.get("name", ""), r.get("age", ""), r.get("education", ""), (r.get("resume", "") or "")[:80]])
+        key = r.get("phone") or r.get("resume_key") or "|".join([r.get("name", ""), r.get("age", ""), r.get("education", ""), (r.get("resume", "") or "")[:80]])
         if not key.strip("|"):
             continue
         if key in seen:
