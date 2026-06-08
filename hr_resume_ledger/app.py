@@ -100,13 +100,14 @@ def init_db():
                 resume TEXT NOT NULL DEFAULT '',
                 work_trace TEXT NOT NULL DEFAULT '',
                 source_url TEXT NOT NULL DEFAULT '',
+                resume_key TEXT NOT NULL DEFAULT '',
                 local_pdf_path TEXT NOT NULL DEFAULT '',
                 raw_text TEXT NOT NULL DEFAULT ''
             )
             """
         )
         cols = {r[1] for r in con.execute("PRAGMA table_info(candidates)")}
-        for col in ["education", "age", "age_years", "gender", "email", "wechat", "basic_info", "status", "job_desc", "matched_experience", "resume", "work_trace", "source_url", "local_pdf_path", "raw_text"]:
+        for col in ["education", "age", "age_years", "gender", "email", "wechat", "basic_info", "status", "job_desc", "matched_experience", "resume", "work_trace", "source_url", "resume_key", "local_pdf_path", "raw_text"]:
             if col not in cols:
                 con.execute(f"ALTER TABLE candidates ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
 
@@ -315,6 +316,7 @@ def extract_candidate(payload, job_keywords=""):
         "resume": text[:60000],
         "raw_text": text[:60000],
         "source_url": url,
+        "resume_key": extract_resume_key(url),
         "source_title": title,
         "matched": "、".join(matched),
         "suitable": suitable,
@@ -704,6 +706,16 @@ def safe_filename(text):
     return re.sub(r"[^\w\u4e00-\u9fa5.-]+", "_", (text or "").strip()).strip("_")[:80] or "resume"
 
 
+def extract_resume_key(url):
+    try:
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(url or "").query)
+        rn = (q.get("resumeNumber") or [""])[0]
+        jn = (q.get("jobNumber") or [""])[0]
+        return f"{jn}|{rn}" if rn else ""
+    except Exception:
+        return ""
+
+
 def zhaopin_export_current_pdf(ws, candidate=None):
     """Call Zhilian's own '存至本地' PDF flow for the currently opened resume."""
     script = r"""
@@ -901,9 +913,10 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
         detail = extract_candidate(page, job_keywords)
         detail["source_url"] = page.get("url", "")
         detail["source_title"] = page.get("title", "")
+        detail["resume_key"] = extract_resume_key(page.get("url", ""))
         if platform == "zhaopin":
             prospective = merge_card_detail(candidate, detail)
-            if semantic_match_score(prospective, job_keywords).get("matched"):
+            if candidate.get("matched") or semantic_match_score(prospective, job_keywords).get("matched"):
                 try:
                     pdf = zhaopin_export_current_pdf(ws, prospective)
                     if pdf.get("ok"):
@@ -940,6 +953,7 @@ def save_candidate(candidate):
     resume = (candidate.get("resume") or candidate.get("raw_text") or "").strip()
     work_trace = candidate.get("work_trace", "") or ""
     source_url = candidate.get("source_url", "") or ""
+    resume_key = candidate.get("resume_key", "") or extract_resume_key(source_url)
     local_pdf_path = candidate.get("local_pdf_path", "") or ""
     if not (name or phone or resume):
         return None
@@ -947,11 +961,16 @@ def save_candidate(candidate):
         if phone:
             row = con.execute("SELECT id FROM candidates WHERE phone=? LIMIT 1", (phone,)).fetchone()
             if row:
-                con.execute("UPDATE candidates SET name=?, phone=?, email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=?, local_pdf_path=COALESCE(NULLIF(?,''), local_pdf_path) WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, local_pdf_path, row[0]))
+                con.execute("UPDATE candidates SET name=?, phone=?, email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=?, resume_key=COALESCE(NULLIF(?,''), resume_key), local_pdf_path=COALESCE(NULLIF(?,''), local_pdf_path) WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, resume_key, local_pdf_path, row[0]))
+                return row[0]
+        if resume_key:
+            row = con.execute("SELECT id FROM candidates WHERE resume_key=? LIMIT 1", (resume_key,)).fetchone()
+            if row:
+                con.execute("UPDATE candidates SET name=?, phone=COALESCE(NULLIF(?,''), phone), email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=?, local_pdf_path=COALESCE(NULLIF(?,''), local_pdf_path) WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, local_pdf_path, row[0]))
                 return row[0]
         cur = con.execute(
-            "INSERT INTO candidates (created_at,name,phone,email,wechat,education,age,age_years,gender,basic_info,status,job_desc,matched_experience,resume,raw_text,work_trace,source_url,local_pdf_path) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, local_pdf_path),
+            "INSERT INTO candidates (created_at,name,phone,email,wechat,education,age,age_years,gender,basic_info,status,job_desc,matched_experience,resume,raw_text,work_trace,source_url,resume_key,local_pdf_path) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, resume_key, local_pdf_path),
         )
         return cur.lastrowid
 
@@ -1057,15 +1076,56 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
 
 def list_candidates():
     with sqlite3.connect(DB_PATH) as con:
-        cur = con.execute("SELECT id,created_at,name,phone,email,wechat,education,age,age_years,gender,basic_info,status,job_desc,matched_experience,COALESCE(NULLIF(resume,''),raw_text) AS resume,work_trace,source_url,local_pdf_path FROM candidates ORDER BY id DESC")
+        cur = con.execute("SELECT id,created_at,name,phone,email,wechat,education,age,age_years,gender,basic_info,status,job_desc,matched_experience,COALESCE(NULLIF(resume,''),raw_text) AS resume,work_trace,source_url,resume_key,local_pdf_path FROM candidates ORDER BY id DESC")
         return [build_display_row(x) for x in rows_to_dicts(cur)]
 
 
 def get_candidate(cid):
     with sqlite3.connect(DB_PATH) as con:
-        cur = con.execute("SELECT id,created_at,name,phone,email,wechat,education,age,age_years,gender,basic_info,status,job_desc,matched_experience,COALESCE(NULLIF(resume,''),raw_text) AS resume,work_trace,source_url,local_pdf_path FROM candidates WHERE id=? LIMIT 1", (int(cid),))
+        cur = con.execute("SELECT id,created_at,name,phone,email,wechat,education,age,age_years,gender,basic_info,status,job_desc,matched_experience,COALESCE(NULLIF(resume,''),raw_text) AS resume,work_trace,source_url,resume_key,local_pdf_path FROM candidates WHERE id=? LIMIT 1", (int(cid),))
         rows = rows_to_dicts(cur)
         return build_display_row(rows[0]) if rows else None
+
+
+def generate_candidate_pdf(cid):
+    row = get_candidate(cid)
+    if not row:
+        raise RuntimeError("候选人不存在")
+    source_url = row.get("source_url") or ""
+    if "zhaopin.com" not in source_url or not extract_resume_key(source_url):
+        raise RuntimeError("缺少智联简历链接，无法补生成 PDF")
+    tab = find_recommend_tab("zhaopin") or (cdp_tabs()[0] if cdp_tabs() else None)
+    if not tab:
+        raise RuntimeError("未连接受控浏览器，请先打开招聘平台浏览器")
+    ws = CdpWebSocket(tab["ws"])
+    try:
+        ws.call("Page.navigate", {"url": source_url}, timeout=8)
+        wait_page_changed(ws, "", "", wait_seconds=8)
+        pdf = zhaopin_export_current_pdf(ws, row)
+    finally:
+        ws.close()
+    if not pdf.get("ok"):
+        raise RuntimeError(pdf.get("error") or "PDF 生成失败")
+    with sqlite3.connect(DB_PATH) as con:
+        con.execute("UPDATE candidates SET local_pdf_path=?, resume_key=COALESCE(NULLIF(resume_key,''), ?) WHERE id=?", (pdf["path"], extract_resume_key(source_url), int(cid)))
+    return {"ok": True, "id": int(cid), "local_pdf_path": pdf["path"]}
+
+
+def dedupe_candidates():
+    rows = list_candidates()
+    seen, delete_ids = set(), []
+    for r in rows:
+        key = r.get("phone") or r.get("resume_key") or "|".join([r.get("name", ""), r.get("age", ""), r.get("education", ""), (r.get("resume", "") or "")[:80]])
+        if not key.strip("|"):
+            continue
+        if key in seen:
+            delete_ids.append(r["id"])
+        else:
+            seen.add(key)
+    with sqlite3.connect(DB_PATH) as con:
+        for cid in delete_ids:
+            con.execute("DELETE FROM candidates WHERE id=?", (cid,))
+    return {"ok": True, "deleted": len(delete_ids)}
 
 
 def limit_lines(text, max_lines):
@@ -1104,6 +1164,8 @@ def compose_profile_summary(profile_text, matched_text, row=None):
 
 def build_display_row(row):
     d = dict(row)
+    if not d.get("resume_key"):
+        d["resume_key"] = extract_resume_key(d.get("source_url", ""))
     matched = limit_lines(row.get("matched_experience", "") or "", 5)
     summary_src = row.get("basic_info", "") or row.get("resume", "")
     d["profile_summary"] = compose_profile_summary(summary_src, matched, row)
@@ -1275,6 +1337,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": delete_candidate(body.get("id"))})
             elif path == "/api/clear-candidates":
                 self.send_json({"ok": clear_candidates()})
+            elif path == "/api/generate-candidate-pdf":
+                self.send_json(generate_candidate_pdf(body.get("id")))
+            elif path == "/api/dedupe-candidates":
+                self.send_json(dedupe_candidates())
             else:
                 self.send_json({"error": "not found"}, 404)
         except Exception as e:

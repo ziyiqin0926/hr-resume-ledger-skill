@@ -58,15 +58,28 @@ def test_candidate_pdf_path_is_stored_and_marked(tmp_path, monkeypatch):
     assert row["has_pdf"] is True
 
 
+def test_save_candidate_dedupes_by_resume_key_without_phone(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DB_PATH", tmp_path / "x.sqlite3")
+    app.init_db()
+    url = "https://rd6.zhaopin.com/app/recommend?jobNumber=J1&resumeNumber=R1"
+    a = app.save_candidate({"name": "张先生", "resume": "简历A", "source_url": url})
+    b = app.save_candidate({"name": "张先生", "resume": "简历B", "source_url": url})
+    rows = app.list_candidates()
+    assert a == b
+    assert len(rows) == 1
+    assert rows[0]["resume_key"] == "J1|R1"
+
+
 def test_frontend_prefers_pdf_preview():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     assert "/api/candidate-pdf?id=" in html
     assert "预览PDF简历" in html
     assert "PDF：${c.has_pdf?'已保存':'未生成'}" in html
-    assert "preview-grid" in html
     assert "renderResumePreview" in html
     assert "工作经历" in html and "教育经历" in html
     assert "download=1" in html
     assert "新窗口打开PDF" in html
     assert "资质公示" in html and "存至本地" in html
+    assert "generatePdf" in html
+    assert "dedupeCandidates" in html
 
