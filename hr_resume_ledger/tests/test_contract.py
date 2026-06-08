@@ -81,6 +81,12 @@ def test_same_resume_key_is_strictly_deduped(tmp_path, monkeypatch):
     assert rows[0]["name"] == "李女士"
 
 
+def test_related_experience_enters_ledger_for_review():
+    row = {"matched": False, "score": 35, "matched_experience": "做过建筑方案设计", "detail_opened": True, "reason": ""}
+    assert app.should_enter_ledger(row) is True
+    assert "待复核" in row["reason"]
+
+
 def test_frontend_prefers_pdf_preview():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     assert "/api/candidate-pdf?id=" in html

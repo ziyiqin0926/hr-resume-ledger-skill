@@ -962,6 +962,18 @@ def build_final_candidate_decision(card, detail, job_keywords):
     return row
 
 
+def should_enter_ledger(row):
+    if row.get("matched"):
+        return True
+    if row.get("matched_experience") and int(row.get("score") or 0) >= 35:
+        row["reason"] = (row.get("reason") or "") + "；相关经历待复核"
+        return True
+    if row.get("matched_experience") and not row.get("detail_opened"):
+        row["reason"] = (row.get("reason") or "") + "；详情未验证，先按推荐卡片相关经历入台账待复核"
+        return True
+    return False
+
+
 def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zhaopin"):
     start_url = start_page.get("url", "")
     start_text = start_page.get("text", "")
@@ -1086,8 +1098,9 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
                 detail, err = open_candidate_detail(ws, start_page, cand, job_keywords, p["id"])
                 row = build_final_candidate_decision(cand, detail, job_keywords)
                 row["source_url"] = row.get("source_url") or start_page.get("url", "")
+                row["ledger_included"] = should_enter_ledger(row)
                 final_items.append(row)
-                if row.get("matched"):
+                if row.get("ledger_included"):
                     cid = save_candidate(row)
                     saved.append({"id": cid, "name": row.get("name", ""), "phone": row.get("phone", ""), "score": row.get("score", 0), "reason": row.get("reason", ""), "detail_opened": row.get("detail_opened", False), "has_pdf": bool(row.get("local_pdf_path"))})
                     progress_items.append({"name": row.get("name", ""), "phone": row.get("phone", ""), "status": "已入库" + ("｜PDF已保存" if row.get("local_pdf_path") else ""), "detail_opened": row.get("detail_opened", False)})
@@ -1098,7 +1111,8 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
                     skipped.append({"name": cand.get("name", ""), "reason": reason})
                     progress_items.append({"name": cand.get("name", ""), "status": "不符合", "reason": reason})
                 set_progress(run_id, total=len(report["items"]), current=idx, message=f"已处理：{cand.get('name','')}", items=progress_items, done=False)
-            final_report = {"total": len(final_items), "matched": sum(1 for x in final_items if x.get("matched")), "percent": round(100 * sum(1 for x in final_items if x.get("matched")) / len(final_items)) if final_items else 0, "items": final_items}
+            included_count = sum(1 for x in final_items if x.get("ledger_included"))
+            final_report = {"total": len(final_items), "matched": included_count, "percent": round(100 * included_count / len(final_items)) if final_items else 0, "items": final_items}
             set_progress(run_id, total=len(final_items), current=len(final_items), message=f"采集完成：入库 {len(saved)} 人", items=progress_items, done=True)
             return {"saved": saved, "skipped": skipped, "total_links": len(saved), "match_report": final_report, "page_url": page_url}
         report = build_match_report([], job_keywords)
