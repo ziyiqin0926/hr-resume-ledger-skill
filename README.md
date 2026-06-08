@@ -11,7 +11,6 @@ hr_resume_ledger/                         # complete runnable app
   app.py                                  # local Python server + scraping/matching/export logic
   static/index.html                       # exact browser UI
   tests/                                  # regression tests
-  dist/HR简历台账.exe                     # optional built Windows exe, if usable on target PC
 skills/hr-resume-ledger-workflow/         # Codex Skill
   SKILL.md
   scripts/bootstrap_hr_resume_ledger.ps1
@@ -27,7 +26,7 @@ skills/hr-resume-ledger-workflow/         # Codex Skill
 
 The local app itself mainly uses Python standard library. Tests require `pytest`.
 
-## Run from source
+## Run from source \(recommended; this is the 1:1 page\)
 
 ```powershell
 git clone https://github.com/ziyiqin0926/hr-resume-ledger-skill.git
@@ -79,3 +78,4 @@ cd hr_resume_ledger
 python -m py_compile app.py
 python -m pytest -q
 ```
+
