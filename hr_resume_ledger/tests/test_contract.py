@@ -93,9 +93,28 @@ def test_card_only_candidates_do_not_dedupe_by_list_url(tmp_path, monkeypatch):
 
 
 def test_related_experience_enters_ledger_for_review():
-    row = {"matched": False, "score": 35, "matched_experience": "做过建筑方案设计", "detail_opened": True, "reason": ""}
+    row = {"matched": False, "score": 35, "matched_experience": "做过建筑方案设计", "detail_opened": True, "reason": "", "phone": "13800138000"}
     assert app.should_enter_ledger(row) is True
     assert "待复核" in row["reason"]
+
+
+def test_related_experience_without_backtrack_anchor_is_not_ledgered():
+    row = {"matched": True, "score": 80, "matched_experience": "做过建筑方案设计", "detail_opened": True, "reason": ""}
+    assert app.should_enter_ledger(row) is False
+    assert "缺少联系方式/PDF/原简历直达锚点" in row["reason"]
+
+
+def test_zhaopin_resume_url_is_backtrack_anchor():
+    row = {
+        "matched": True,
+        "score": 80,
+        "matched_experience": "做过建筑方案设计",
+        "detail_opened": True,
+        "reason": "",
+        "source_url": "https://rd6.zhaopin.com/app/recommend?jobNumber=J1&resumeNumber=R1",
+    }
+    assert app.should_enter_ledger(row) is True
+    assert "原简历可直达" in row["reason"]
 
 
 def test_resume_text_dedupes_repeated_paragraphs():

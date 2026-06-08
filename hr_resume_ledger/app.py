@@ -763,6 +763,48 @@ def extract_resume_key(url):
         return ""
 
 
+def sanitize_source_url(url):
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if "zhaopin.com" in url and not extract_resume_key(url):
+        return ""
+    return url
+
+
+def has_contact(row):
+    return bool((row or {}).get("phone") or (row or {}).get("email") or (row or {}).get("wechat"))
+
+
+def has_pdf(row):
+    path = (row or {}).get("local_pdf_path") or ""
+    return bool(path and Path(path).exists())
+
+
+def has_resume_anchor(row):
+    row = row or {}
+    source_url = sanitize_source_url(row.get("source_url", ""))
+    if not source_url:
+        return False
+    if "zhaopin.com" in source_url:
+        return bool(extract_resume_key(source_url))
+    return True
+
+
+def backtrack_status(row):
+    if has_contact(row):
+        return "可直接沟通"
+    if has_pdf(row):
+        return "PDF已保存，可从PDF回溯"
+    if has_resume_anchor(row):
+        return "原简历可直达，可补PDF/联系方式"
+    return "缺少联系方式、PDF、原简历直达锚点"
+
+
+def has_backtrack_anchor(row):
+    return has_contact(row) or has_pdf(row) or has_resume_anchor(row)
+
+
 def zhaopin_export_current_pdf(ws, candidate=None):
     """Call Zhilian's own '存至本地' PDF flow for the currently opened resume."""
     script = r"""
@@ -994,7 +1036,7 @@ def merge_card_detail(card, detail):
 
 def build_final_candidate_decision(card, detail, job_keywords):
     row = merge_card_detail(card, detail)
-    row["source_url"] = row.get("source_url") or card.get("source_url", "")
+    row["source_url"] = sanitize_source_url(row.get("source_url") or card.get("source_url", ""))
     m = semantic_match_score(row, job_keywords)
     row.update(m)
     evidence = matched_experience(row.get("resume", "") or row.get("raw_text", ""), job_keywords)
@@ -1005,13 +1047,21 @@ def build_final_candidate_decision(card, detail, job_keywords):
 
 
 def should_enter_ledger(row):
+    related = bool(row.get("matched")) or bool(row.get("matched_experience") and int(row.get("score") or 0) >= 35)
+    if not related:
+        return False
+    if row.get("detail_opened") is False:
+        row["reason"] = (row.get("reason") or "") + "；详情未验证，不入有效台账"
+        return False
+    if not has_backtrack_anchor(row):
+        row["reason"] = (row.get("reason") or "") + "；符合经历但缺少联系方式/PDF/原简历直达锚点，不入有效台账"
+        return False
     if row.get("matched"):
+        row["reason"] = (row.get("reason") or "") + "；" + backtrack_status(row)
         return True
     if row.get("matched_experience") and int(row.get("score") or 0) >= 35:
         row["reason"] = (row.get("reason") or "") + "；相关经历待复核"
-        return True
-    if row.get("matched_experience") and not row.get("detail_opened"):
-        row["reason"] = (row.get("reason") or "") + "；详情未验证，先按推荐卡片相关经历入台账待复核"
+        row["reason"] += "；" + backtrack_status(row)
         return True
     return False
 
@@ -1078,7 +1128,7 @@ def save_candidate(candidate):
     hit_exp = (candidate.get("matched_experience") or "").strip()
     resume = (candidate.get("resume") or candidate.get("raw_text") or "").strip()
     work_trace = candidate.get("work_trace", "") or ""
-    source_url = candidate.get("source_url", "") or ""
+    source_url = sanitize_source_url(candidate.get("source_url", "") or "")
     resume_key = "" if candidate.get("detail_opened") is False else (candidate.get("resume_key", "") or extract_resume_key(source_url))
     if candidate.get("detail_opened") is False:
         source_url = ""
@@ -1089,12 +1139,12 @@ def save_candidate(candidate):
         if phone:
             row = con.execute("SELECT id FROM candidates WHERE phone=? LIMIT 1", (phone,)).fetchone()
             if row:
-                con.execute("UPDATE candidates SET name=?, phone=?, email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=?, resume_key=COALESCE(NULLIF(?,''), resume_key), local_pdf_path=COALESCE(NULLIF(?,''), local_pdf_path) WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, resume_key, local_pdf_path, row[0]))
+                con.execute("UPDATE candidates SET name=?, phone=?, email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=COALESCE(NULLIF(?,''), source_url), resume_key=COALESCE(NULLIF(?,''), resume_key), local_pdf_path=COALESCE(NULLIF(?,''), local_pdf_path) WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, resume_key, local_pdf_path, row[0]))
                 return row[0]
         if resume_key:
             row = con.execute("SELECT id FROM candidates WHERE resume_key=? LIMIT 1", (resume_key,)).fetchone()
             if row:
-                con.execute("UPDATE candidates SET name=?, phone=COALESCE(NULLIF(?,''), phone), email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=?, local_pdf_path=COALESCE(NULLIF(?,''), local_pdf_path) WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, local_pdf_path, row[0]))
+                con.execute("UPDATE candidates SET name=?, phone=COALESCE(NULLIF(?,''), phone), email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=COALESCE(NULLIF(?,''), source_url), local_pdf_path=COALESCE(NULLIF(?,''), local_pdf_path) WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, local_pdf_path, row[0]))
                 return row[0]
         cur = con.execute(
             "INSERT INTO candidates (created_at,name,phone,email,wechat,education,age,age_years,gender,basic_info,status,job_desc,matched_experience,resume,raw_text,work_trace,source_url,resume_key,local_pdf_path) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -1149,19 +1199,19 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
                     row["source_url"] = ""
                     row["resume_key"] = ""
                 else:
-                    row["source_url"] = row.get("source_url") or start_page.get("url", "")
+                    row["source_url"] = sanitize_source_url(row.get("source_url", ""))
                 row["ledger_included"] = should_enter_ledger(row)
                 final_items.append(row)
                 if row.get("ledger_included"):
                     cid = save_candidate(row)
-                    saved.append({"id": cid, "name": row.get("name", ""), "phone": row.get("phone", ""), "score": row.get("score", 0), "reason": row.get("reason", ""), "detail_opened": row.get("detail_opened", False), "has_pdf": bool(row.get("local_pdf_path"))})
-                    progress_items.append({"name": row.get("name", ""), "phone": row.get("phone", ""), "status": "已入库" + ("｜PDF已保存" if row.get("local_pdf_path") else ""), "detail_opened": row.get("detail_opened", False)})
+                    saved.append({"id": cid, "name": row.get("name", ""), "phone": row.get("phone", ""), "score": row.get("score", 0), "reason": row.get("reason", ""), "detail_opened": row.get("detail_opened", False), "has_pdf": has_pdf(row), "backtrack_status": backtrack_status(row)})
+                    progress_items.append({"name": row.get("name", ""), "phone": row.get("phone", ""), "status": "已入库｜" + backtrack_status(row), "detail_opened": row.get("detail_opened", False)})
                     if err:
                         skipped.append({"name": cand.get("name", ""), "reason": "详情打开失败，已保存推荐页摘要：" + err})
                 else:
                     reason = err or row.get("reason", "相关职业经历不匹配")
                     skipped.append({"name": cand.get("name", ""), "reason": reason})
-                    progress_items.append({"name": cand.get("name", ""), "status": "不符合", "reason": reason})
+                    progress_items.append({"name": cand.get("name", ""), "status": "不入库", "reason": reason})
                 set_progress(run_id, total=len(report["items"]), current=idx, message=f"已处理：{cand.get('name','')}", items=progress_items, done=False)
             included_count = sum(1 for x in final_items if x.get("ledger_included"))
             final_report = {"total": len(final_items), "matched": included_count, "percent": round(100 * included_count / len(final_items)) if final_items else 0, "items": final_items}
@@ -1185,10 +1235,14 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
                 if not cand["matched"]:
                     skipped.append({"name": cand.get("name", ""), "reason": cand.get("reason", "")})
                     continue
-                cand["source_url"] = start_page.get("url", "")
-                cand["work_trace"] = json.dumps(build_trace(cand, job_keywords, start_page.get("url", "")), ensure_ascii=False)
-                cid = save_candidate(cand)
-                saved.append({"id": cid, "name": cand["name"], "phone": cand["phone"], "score": cand["score"], "reason": cand["reason"]})
+                cand["source_url"] = ""
+                cand["detail_opened"] = False
+                cand["work_trace"] = json.dumps(build_trace(cand, job_keywords, ""), ensure_ascii=False)
+                if should_enter_ledger(cand):
+                    cid = save_candidate(cand)
+                    saved.append({"id": cid, "name": cand["name"], "phone": cand["phone"], "score": cand["score"], "reason": cand["reason"], "backtrack_status": backtrack_status(cand)})
+                else:
+                    skipped.append({"name": cand.get("name", ""), "reason": cand.get("reason", "缺少完整简历回溯锚点")})
             return {"saved": saved, "skipped": skipped or [{"reason": "当前页未识别到符合要求的候选人"}], "total_links": 0, "match_report": report}
         for href in links:
             try:
@@ -1196,11 +1250,14 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
                 time.sleep(1.5)
                 page = read_current_page(ws)
                 cand = extract_candidate(page, job_keywords)
-                if cand["suitable"] and (cand["phone"] or cand.get("matched_experience")):
+                cand["source_url"] = sanitize_source_url(page.get("url", ""))
+                cand["detail_opened"] = True
+                cand.update(semantic_match_score(cand, job_keywords))
+                if should_enter_ledger(cand):
                     cid = save_candidate(cand)
                     saved.append({"id": cid, "name": cand["name"], "phone": cand["phone"]})
                 else:
-                    skipped.append({"url": href, "reason": "无电话或不命中关键词"})
+                    skipped.append({"url": href, "reason": cand.get("reason", "不匹配或缺少回溯锚点")})
             except Exception as e:
                 skipped.append({"url": href, "reason": str(e)})
     finally:
@@ -1299,6 +1356,7 @@ def compose_profile_summary(profile_text, matched_text, row=None):
 
 def build_display_row(row):
     d = dict(row)
+    d["source_url"] = sanitize_source_url(d.get("source_url", ""))
     if not d.get("resume_key"):
         d["resume_key"] = extract_resume_key(d.get("source_url", ""))
     d["resume"] = dedupe_resume_text(d.get("resume", ""))
@@ -1311,7 +1369,9 @@ def build_display_row(row):
     summary_src = row.get("basic_info", "") or row.get("resume", "")
     d["profile_summary"] = compose_profile_summary(summary_src, matched, row)
     d["match_excerpt"] = matched or "已打开完整简历，但暂未提取到明确匹配经历"
-    d["has_pdf"] = bool(row.get("local_pdf_path") and Path(row.get("local_pdf_path", "")).exists())
+    d["has_pdf"] = has_pdf(d)
+    d["backtrack_status"] = backtrack_status(d)
+    d["has_backtrack"] = has_backtrack_anchor(d)
     return d
 
 
@@ -1342,6 +1402,7 @@ def build_export_row(row):
         backtrack.append("PDF：" + row.get("local_pdf_path", ""))
     if row.get("source_url"):
         backtrack.append("智联原简历：" + row.get("source_url", ""))
+    backtrack.insert(0, "回溯状态：" + backtrack_status(row))
     return {
         "姓名": row.get("name", "") or "未识别",
         "电话": csv_phone_text(row.get("phone", "")),
