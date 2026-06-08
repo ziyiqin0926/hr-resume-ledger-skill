@@ -272,7 +272,11 @@ def guess_name(lines, title=""):
         m = re.search(r"^\s*([\u4e00-\u9fa5]{2,4})\s*(?:电话|手机|1[3-9]\d{9})", line)
         if m and not is_bad_name(m.group(1)):
             return m.group(1)
-    bad = ["智联", "招聘", "推荐", "首页", "简历", "电话", "手机", "邮箱", "求职", "工作", "经验", "本科", "硕士"] + job_words
+    for i, line in enumerate(lines[:120]):
+        s = line.strip()
+        if re.match(r"^[\u4e00-\u9fa5]{1,4}(先生|女士)$", s) and any("岁" in x for x in lines[i:i + 6]):
+            return s
+    bad = ["智联", "招聘", "推荐", "首页", "简历", "电话", "手机", "邮箱", "求职", "工作", "经验", "本科", "硕士", "搜索", "聊天", "互动", "职位", "道具", "企业管理", "更多", "个人中心", "猎头服务", "资质公示", "法律协议", "手机版", "帮助中心"] + job_words
     sources = re.split(r"[-_|｜—\s]+", title or "") + lines[:40]
     for item in sources:
         s = re.sub(r"[^\u4e00-\u9fa5A-Za-z]", "", item).strip()
@@ -1284,6 +1288,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers(); self.wfile.write(body)
 
     def serve_candidate_pdf(self, cid):
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         row = get_candidate(cid)
         pdf = Path((row or {}).get("local_pdf_path") or "")
         try:
@@ -1294,7 +1299,8 @@ class Handler(BaseHTTPRequestHandler):
             body = pdf.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "application/pdf")
-            self.send_header("Content-Disposition", f'inline; filename="{pdf.name}"')
+            mode = "attachment" if (qs.get("download") or ["0"])[0] == "1" else "inline"
+            self.send_header("Content-Disposition", f"{mode}; filename=resume-{cid}.pdf")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers(); self.wfile.write(body)
         except Exception as e:

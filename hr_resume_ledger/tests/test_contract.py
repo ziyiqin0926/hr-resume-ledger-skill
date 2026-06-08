@@ -66,4 +66,7 @@ def test_frontend_prefers_pdf_preview():
     assert "preview-grid" in html
     assert "renderResumePreview" in html
     assert "工作经历" in html and "教育经历" in html
+    assert "download=1" in html
+    assert "新窗口打开PDF" in html
+    assert "资质公示" in html and "存至本地" in html
 
