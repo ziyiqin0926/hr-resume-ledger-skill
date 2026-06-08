@@ -81,6 +81,17 @@ def test_same_resume_key_is_strictly_deduped(tmp_path, monkeypatch):
     assert rows[0]["name"] == "李女士"
 
 
+def test_card_only_candidates_do_not_dedupe_by_list_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DB_PATH", tmp_path / "x.sqlite3")
+    app.init_db()
+    url = "https://rd6.zhaopin.com/app/recommend?jobNumber=J1&resumeNumber=R1"
+    app.save_candidate({"name": "张先生", "age": "22", "resume": "建筑设计", "source_url": url, "detail_opened": False})
+    app.save_candidate({"name": "李女士", "age": "33", "resume": "建筑设计", "source_url": url, "detail_opened": False})
+    rows = app.list_candidates()
+    assert len(rows) == 2
+    assert all(not r["resume_key"] for r in rows)
+
+
 def test_related_experience_enters_ledger_for_review():
     row = {"matched": False, "score": 35, "matched_experience": "做过建筑方案设计", "detail_opened": True, "reason": ""}
     assert app.should_enter_ledger(row) is True

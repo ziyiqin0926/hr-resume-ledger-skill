@@ -1033,7 +1033,9 @@ def save_candidate(candidate):
     resume = (candidate.get("resume") or candidate.get("raw_text") or "").strip()
     work_trace = candidate.get("work_trace", "") or ""
     source_url = candidate.get("source_url", "") or ""
-    resume_key = candidate.get("resume_key", "") or extract_resume_key(source_url)
+    resume_key = "" if candidate.get("detail_opened") is False else (candidate.get("resume_key", "") or extract_resume_key(source_url))
+    if candidate.get("detail_opened") is False:
+        source_url = ""
     local_pdf_path = candidate.get("local_pdf_path", "") or ""
     if not (name or phone or resume):
         return None
@@ -1097,7 +1099,11 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
                 set_progress(run_id, total=len(report["items"]), current=idx, message=f"正在打开完整简历：{cand.get('name','')}", items=progress_items, done=False)
                 detail, err = open_candidate_detail(ws, start_page, cand, job_keywords, p["id"])
                 row = build_final_candidate_decision(cand, detail, job_keywords)
-                row["source_url"] = row.get("source_url") or start_page.get("url", "")
+                if not row.get("detail_opened"):
+                    row["source_url"] = ""
+                    row["resume_key"] = ""
+                else:
+                    row["source_url"] = row.get("source_url") or start_page.get("url", "")
                 row["ledger_included"] = should_enter_ledger(row)
                 final_items.append(row)
                 if row.get("ledger_included"):
