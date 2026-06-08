@@ -354,11 +354,14 @@ def extract_recommendation_cards(text, job_keywords=""):
     name_re = re.compile(r"^[\u4e00-\u9fa5]{1,4}(?:先生|女士)$")
     starts = [i for i, line in enumerate(lines) if name_re.match(line)]
     rows = []
+    seen_names = {}
     for idx, start in enumerate(starts):
         end = starts[idx + 1] if idx + 1 < len(starts) else len(lines)
         block_lines = lines[start:end]
         block = "\n".join(block_lines)
         name = block_lines[0]
+        occurrence = seen_names.get(name, 0)
+        seen_names[name] = occurrence + 1
         edu = extract_education(block)
         contacts = extract_contacts(block)
         profile = extract_profile_info(block)
@@ -371,6 +374,8 @@ def extract_recommendation_cards(text, job_keywords=""):
             hit = "\n".join([x for x in block_lines if x not in ("打电话", "打招呼")][:12])
         c = {
             "name": name,
+            "card_index": idx,
+            "name_occurrence": occurrence,
             "phone": phone,
             "email": contacts["email"],
             "wechat": contacts["wechat"],
@@ -843,11 +848,13 @@ def find_candidate_href(page, candidate, platform="zhaopin"):
     return ""
 
 
-def click_candidate_by_name(ws, name):
+def click_candidate_by_name(ws, name, occurrence=0):
     js_name = json.dumps(name or "", ensure_ascii=False)
+    js_occurrence = int(occurrence or 0)
     expression = f"""
 (() => {{
   const name = {js_name};
+  const occurrence = {js_occurrence};
   const base = name.replace(/(先生|女士)$/,'');
   const keys = [name, base].filter(Boolean);
   const nodes = Array.from(document.querySelectorAll('a[href],button,[role=button],li,section,div'))
@@ -855,12 +862,21 @@ def click_candidate_by_name(ws, name):
       const t = (el.innerText || el.textContent || '').trim();
       return t && t.length < 1600 && keys.some(k => t.includes(k));
     }})
-    .sort((a,b) => (a.innerText||'').length - (b.innerText||'').length);
+    .sort((a,b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top || (a.innerText||'').length - (b.innerText||'').length);
+  const uniq = [];
   for (const el of nodes) {{
+    const r = el.getBoundingClientRect();
+    if (r.width < 20 || r.height < 10) continue;
+    if (uniq.some(x => Math.abs(x.getBoundingClientRect().top - r.top) < 6)) continue;
+    uniq.push(el);
+  }}
+  const picked = uniq[Math.min(occurrence, Math.max(0, uniq.length - 1))] || uniq[0];
+  if (picked) {{
+    const el = picked;
     const target = el.closest('a[href],button,[role=button]') || el.querySelector('a[href],button,[role=button]') || el;
     target.scrollIntoView({{block:'center'}});
     target.click();
-    return JSON.stringify({{ok:true, text:(target.innerText||target.textContent||'').trim().slice(0,120)}});
+    return JSON.stringify({{ok:true, occurrence, candidates: uniq.length, text:(target.innerText||target.textContent||'').trim().slice(0,120)}});
   }}
   return JSON.stringify({{ok:false}});
 }})()
@@ -879,7 +895,7 @@ def merge_card_detail(card, detail):
     row = dict(card)
     for key in ["name", "phone", "email", "wechat", "education", "age", "age_years", "gender", "basic_info", "status", "job_desc", "matched_experience"]:
         row[key] = detail.get(key) or row.get(key, "")
-    for key in ["resume", "raw_text", "source_url", "source_title", "local_pdf_path"]:
+    for key in ["resume", "raw_text", "source_url", "source_title", "resume_key", "local_pdf_path"]:
         if detail.get(key):
             row[key] = detail.get(key)
     row["detail_opened"] = True
@@ -906,7 +922,7 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
         if href:
             ws.call("Page.navigate", {"url": href}, timeout=5)
         else:
-            clicked = click_candidate_by_name(ws, candidate.get("name", ""))
+            clicked = click_candidate_by_name(ws, candidate.get("name", ""), candidate.get("name_occurrence", 0))
             if not clicked.get("ok"):
                 return None, clicked.get("error") or "未找到可点击的候选人卡片"
         page = wait_page_changed(ws, start_url, start_text)
@@ -964,7 +980,7 @@ def save_candidate(candidate):
                 con.execute("UPDATE candidates SET name=?, phone=?, email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=?, resume_key=COALESCE(NULLIF(?,''), resume_key), local_pdf_path=COALESCE(NULLIF(?,''), local_pdf_path) WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, resume_key, local_pdf_path, row[0]))
                 return row[0]
         if resume_key:
-            row = con.execute("SELECT id FROM candidates WHERE resume_key=? LIMIT 1", (resume_key,)).fetchone()
+            row = con.execute("SELECT id,name,age FROM candidates WHERE resume_key=? AND (name=? OR age=? OR name='' OR age='') LIMIT 1", (resume_key, name, age)).fetchone()
             if row:
                 con.execute("UPDATE candidates SET name=?, phone=COALESCE(NULLIF(?,''), phone), email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=?, local_pdf_path=COALESCE(NULLIF(?,''), local_pdf_path) WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, local_pdf_path, row[0]))
                 return row[0]
@@ -1115,7 +1131,7 @@ def dedupe_candidates():
     rows = list_candidates()
     seen, delete_ids = set(), []
     for r in rows:
-        key = r.get("phone") or r.get("resume_key") or "|".join([r.get("name", ""), r.get("age", ""), r.get("education", ""), (r.get("resume", "") or "")[:80]])
+        key = r.get("phone") or ("|".join([r.get("resume_key", ""), r.get("name", ""), r.get("age", "")]) if r.get("resume_key") else "") or "|".join([r.get("name", ""), r.get("age", ""), r.get("education", ""), (r.get("resume", "") or "")[:80]])
         if not key.strip("|"):
             continue
         if key in seen:
