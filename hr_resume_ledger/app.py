@@ -33,6 +33,28 @@ APP_HOST = os.environ.get("HR_LEDGER_HOST", os.environ.get("APP_HOST", "127.0.0.
 APP_PORT = int(os.environ.get("HR_LEDGER_PORT", os.environ.get("APP_PORT", "8765")))
 CDP_PORT = int(os.environ.get("HR_LEDGER_CDP_PORT", "9222"))
 DEFAULT_COLLECT_LIMIT = 500
+PLATFORMS = {
+    "zhaopin": {
+        "id": "zhaopin", "name": "智联招聘", "home": "https://rd5.zhaopin.com/",
+        "url_keywords": ["zhaopin.com", "rd6.zhaopin.com/app/recommend"],
+        "candidate_keywords": ["resume", "candidate", "talent", "rd5", "rd6", "zhaopin", "recommend"],
+    },
+    "boss": {
+        "id": "boss", "name": "BOSS直聘", "home": "https://www.zhipin.com/",
+        "url_keywords": ["zhipin.com", "bosszhipin.com"],
+        "candidate_keywords": ["geek", "resume", "candidate", "detail", "zhipin"],
+    },
+    "liepin": {
+        "id": "liepin", "name": "猎聘", "home": "https://www.liepin.com/",
+        "url_keywords": ["liepin.com", "lpt.liepin.com"],
+        "candidate_keywords": ["resume", "candidate", "talent", "detail", "liepin"],
+    },
+    "generic": {
+        "id": "generic", "name": "通用页面", "home": "about:blank",
+        "url_keywords": [],
+        "candidate_keywords": ["resume", "candidate", "talent", "detail", "profile", "简历", "候选人"],
+    },
+}
 EXPORT_FIELDS = [
     "姓名", "电话", "工作经历匹配度", "匹配说明", "相关经历",
     "年龄", "性别", "学历", "求职状态", "微信", "邮箱", "个人基本资料",
@@ -40,6 +62,18 @@ EXPORT_FIELDS = [
 XLSX_FIELDS = ["跟进状态", "优先级", "最近跟进时间", "跟进人", "备注"] + EXPORT_FIELDS
 
 PROGRESS = {}
+
+
+def get_platform(platform="zhaopin"):
+    return PLATFORMS.get(platform or "zhaopin") or PLATFORMS["generic"]
+
+
+def platform_matches_url(platform, url):
+    p = get_platform(platform)
+    if p["id"] == "generic":
+        return True
+    s = (url or "").lower()
+    return any(k.lower() in s for k in p["url_keywords"])
 
 
 def init_db():
@@ -545,7 +579,7 @@ def find_browser():
     return None
 
 
-def launch_browser():
+def launch_browser(platform="zhaopin"):
     exe = find_browser()
     if not exe:
         raise RuntimeError("未找到 Chrome 或 Edge")
@@ -557,9 +591,9 @@ def launch_browser():
         f"--user-data-dir={profile}",
         "--no-first-run",
         "--new-window",
-        "https://rd5.zhaopin.com/",
+        get_platform(platform)["home"],
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return {"ok": True, "browser": exe, "port": CDP_PORT}
+    return {"ok": True, "browser": exe, "port": CDP_PORT, "platform": get_platform(platform)["id"]}
 
 
 def cdp_tabs():
@@ -569,13 +603,10 @@ def cdp_tabs():
             for t in tabs if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
 
 
-def find_recommend_tab():
+def find_recommend_tab(platform="zhaopin"):
     tabs = cdp_tabs()
     for t in tabs:
-        if "rd6.zhaopin.com/app/recommend" in (t.get("url") or ""):
-            return t
-    for t in tabs:
-        if "zhaopin.com" in (t.get("url") or ""):
+        if platform_matches_url(platform, t.get("url") or ""):
             return t
     return None
 
@@ -714,11 +745,11 @@ def capture_tab(ws_url, job_keywords=""):
     return {"page": page, "candidate": extract_candidate(page, job_keywords)}
 
 
-def looks_candidate_link(link):
+def looks_candidate_link(link, platform="zhaopin"):
     s = ((link.get("href") or "") + " " + (link.get("text") or "")).lower()
     if any(x in s for x in ["logout", "login", "setting", "help", "javascript:"]):
         return False
-    return any(x in s for x in ["resume", "candidate", "talent", "rd5", "zhaopin", "recommend"])
+    return any(x.lower() in s for x in get_platform(platform)["candidate_keywords"])
 
 
 def name_variants(name):
@@ -726,13 +757,13 @@ def name_variants(name):
     return [x for x in [name, base] if x]
 
 
-def find_candidate_href(page, candidate):
+def find_candidate_href(page, candidate, platform="zhaopin"):
     links = page.get("links", []) or []
     variants = name_variants(candidate.get("name", ""))
     for link in links:
         text = link.get("text", "") or ""
         href = link.get("href", "") or ""
-        if any(v and v in text for v in variants) and looks_candidate_link(link):
+        if any(v and v in text for v in variants) and looks_candidate_link(link, platform):
             return href
     return ""
 
@@ -792,10 +823,10 @@ def build_final_candidate_decision(card, detail, job_keywords):
     return row
 
 
-def open_candidate_detail(ws, start_page, candidate, job_keywords):
+def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zhaopin"):
     start_url = start_page.get("url", "")
     start_text = start_page.get("text", "")
-    href = find_candidate_href(start_page, candidate)
+    href = find_candidate_href(start_page, candidate, platform)
     try:
         if href:
             ws.call("Page.navigate", {"url": href}, timeout=5)
@@ -862,22 +893,23 @@ def clear_candidates():
     return True
 
 
-def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LIMIT, run_id="default"):
-    set_progress(run_id, total=0, current=0, message="开始寻找推荐页", items=[], done=False)
+def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LIMIT, run_id="default", platform="zhaopin"):
+    p = get_platform(platform)
+    set_progress(run_id, total=0, current=0, message=f"开始寻找{p['name']}页面", items=[], done=False)
     if not ws_url:
-        tab = find_recommend_tab()
+        tab = find_recommend_tab(p["id"])
         if not tab:
-            set_progress(run_id, message="未找到智联推荐页", done=True)
-            return {"saved": [], "skipped": [{"reason": "未找到智联推荐页，请先打开 rd6.zhaopin.com/app/recommend"}], "match_report": {"total": 0, "matched": 0, "percent": 0, "items": []}, "page_url": ""}
+            set_progress(run_id, message=f"未找到{p['name']}页面", done=True)
+            return {"saved": [], "skipped": [{"reason": f"未找到{p['name']}页面，请先打开对应招聘平台候选人/推荐页"}], "match_report": {"total": 0, "matched": 0, "percent": 0, "items": []}, "page_url": ""}
         ws_url = tab["ws"]
     ws = CdpWebSocket(ws_url)
     saved, skipped = [], []
     try:
         start_page, ready_cards = read_recommend_page_when_ready(ws)
         page_url = start_page.get("url", "")
-        if "rd6.zhaopin.com/app/recommend" not in page_url:
-            set_progress(run_id, message="当前页不是推荐页", done=True)
-            return {"saved": [], "skipped": [{"reason": f"当前页不是智联推荐页：{page_url}"}], "match_report": {"total": 0, "matched": 0, "percent": 0, "items": []}, "page_url": page_url}
+        if not platform_matches_url(p["id"], page_url):
+            set_progress(run_id, message=f"当前页不是{p['name']}页面", done=True)
+            return {"saved": [], "skipped": [{"reason": f"当前页不是{p['name']}页面：{page_url}"}], "match_report": {"total": 0, "matched": 0, "percent": 0, "items": []}, "page_url": page_url}
         if len(ready_cards) < 3:
             set_progress(run_id, total=len(ready_cards), current=0, message="候选人列表未加载完成", items=ready_cards, done=True)
             return {"saved": [], "skipped": [{"reason": f"候选人列表未加载完成或识别失败：仅识别到 {len(ready_cards)} 人"}], "match_report": {"total": len(ready_cards), "matched": 0, "percent": 0, "items": ready_cards}, "page_url": page_url}
@@ -889,7 +921,7 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
             set_progress(run_id, total=len(report["items"]), current=0, message="已识别推荐卡片，准备打开完整简历", items=progress_items, done=False)
             for idx, cand in enumerate(report["items"], 1):
                 set_progress(run_id, total=len(report["items"]), current=idx, message=f"正在打开完整简历：{cand.get('name','')}", items=progress_items, done=False)
-                detail, err = open_candidate_detail(ws, start_page, cand, job_keywords)
+                detail, err = open_candidate_detail(ws, start_page, cand, job_keywords, p["id"])
                 row = build_final_candidate_decision(cand, detail, job_keywords)
                 row["source_url"] = row.get("source_url") or start_page.get("url", "")
                 final_items.append(row)
@@ -914,7 +946,7 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
         links, seen = [], set()
         for link in raw_links:
             href = link.get("href")
-            if href and href not in seen and looks_candidate_link(link):
+            if href and href not in seen and looks_candidate_link(link, p["id"]):
                 seen.add(href); links.append(href)
             if len(links) >= limit:
                 break
@@ -1119,6 +1151,7 @@ class Handler(BaseHTTPRequestHandler):
                     "db": str(DB_PATH),
                     "browser_found": bool(find_browser()),
                     "export_fields": EXPORT_FIELDS,
+                    "platforms": [{"id": v["id"], "name": v["name"]} for v in PLATFORMS.values()],
                 })
             elif path == "/api/tabs":
                 self.send_json({"tabs": cdp_tabs()})
@@ -1141,11 +1174,11 @@ class Handler(BaseHTTPRequestHandler):
             path = urllib.parse.urlparse(self.path).path
             body = self.read_json()
             if path == "/api/launch-browser":
-                self.send_json(launch_browser())
+                self.send_json(launch_browser(body.get("platform", "zhaopin")))
             elif path == "/api/capture":
                 self.send_json(capture_tab(body.get("ws", ""), body.get("keywords", "")))
             elif path == "/api/collect-recommendations":
-                self.send_json(collect_recommendations(body.get("ws", ""), body.get("keywords", ""), int(body.get("limit", DEFAULT_COLLECT_LIMIT)), body.get("run", "default")))
+                self.send_json(collect_recommendations(body.get("ws", ""), body.get("keywords", ""), int(body.get("limit", DEFAULT_COLLECT_LIMIT)), body.get("run", "default"), body.get("platform", "zhaopin")))
             elif path == "/api/import-text":
                 candidates = extract_candidates_from_text(body.get("text", ""), body.get("keywords", ""))
                 ids = [save_candidate(c) for c in candidates if c.get("phone")]

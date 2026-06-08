@@ -4,6 +4,8 @@ This repository now contains the **complete HR resume ledger app** plus the Code
 
 It is intended for 1:1 deployment on another Windows computer: same page, same local app logic, same export workflow.
 
+Current UI includes a recruitment platform switcher: 智联招聘 / BOSS直聘 / 猎聘 / 通用页面.
+
 ## Contents
 
 ```text
@@ -23,6 +25,7 @@ skills/hr-resume-ledger-workflow/         # Codex Skill
 - Python available as `python` if running from source
 - Codex if you want to use the Skill workflow
 - Manual login to recruiting websites is still required
+- Platform sessions, cookies and anti-bot checks are handled by the user's own browser login state; the app does not bypass verification.
 
 The local app itself mainly uses Python standard library. Tests require `pytest`.
 

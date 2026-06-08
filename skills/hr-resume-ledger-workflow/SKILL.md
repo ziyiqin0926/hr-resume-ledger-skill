@@ -12,7 +12,7 @@ Use this skill for the `hr_resume_ledger` app: recruiting recommendation pages, 
 1. Locate the project folder containing `hr_resume_ledger/app.py`.
 2. Start the local app on `http://127.0.0.1:8765/`.
 3. Open Chrome to the app.
-4. Use the app to open the controlled recruiting browser, log in manually if needed, then navigate to the recommendation page.
+4. Select the recruitment platform in the app (智联招聘 / BOSS直聘 / 猎聘 / 通用页面), open the controlled recruiting browser, log in manually if needed, then navigate to the recommendation/candidate page.
 5. Treat user input as **job requirements and related career-experience scope**, not literal keywords.
 6. Evaluate candidates by:
    - full recommendation pool total `N` (default sample limit: 500);

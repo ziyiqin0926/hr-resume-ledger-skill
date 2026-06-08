@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>智联推荐候选人采集台账</title>
+  <title>招聘平台候选人采集台账</title>
   <style>
     :root{--bg:#f6f7fb;--card:#fff;--ink:#111827;--muted:#667085;--line:#e5e7eb;--brand:#0f766e;--brand2:#b45309;--danger:#b91c1c;--soft:#eef7f4}
     *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:"Microsoft YaHei UI","Segoe UI",sans-serif;font-size:14px}
@@ -22,7 +22,7 @@
 </head>
 <body>
 <header>
-  <div><h1>智联推荐候选人采集台账</h1><div class="sub">按筛选要求打开完整简历，提取姓名、电话、学历、命中经历，形成可导出台账。</div></div>
+  <div><h1>招聘平台候选人采集台账</h1><div class="sub">按筛选要求打开完整简历，提取姓名、电话、学历、命中经历，形成可导出台账。</div></div>
   <div class="actions"><button class="ghost" onclick="health()">检查服务</button><a class="btn" href="/export.xlsx">导出规范版 XLSX</a><a class="btn ghost" href="/export.csv">导出 CSV</a></div>
 </header>
 <main>
@@ -31,12 +31,19 @@
     <div class="panel-bd stack">
       <label>岗位/人选要求</label>
       <textarea id="keywords" placeholder="例：本科 Python SQL 数据分析 3年\n系统会用这些词判断候选人的工作经历是否命中"></textarea>
-      <button onclick="launchBrowser()">打开智联招聘浏览器</button>
-      <button class="secondary" onclick="loadTabs()">检查智联页面</button>
+      <label>招聘平台</label>
+      <select id="platform">
+        <option value="zhaopin">智联招聘</option>
+        <option value="boss">BOSS直聘</option>
+        <option value="liepin">猎聘</option>
+        <option value="generic">通用页面</option>
+      </select>
+      <button onclick="launchBrowser()">打开招聘平台浏览器</button>
+      <button class="secondary" onclick="loadTabs()">检查招聘页面</button>
       <select id="tabs"></select>
-      <button class="warn" onclick="collectRecommendations()">自动分析智联推荐页</button>
+      <button class="warn" onclick="collectRecommendations()">自动分析候选人页</button>
       <button onclick="captureOne()">采集当前完整简历页</button>
-      <div class="hint">推荐流程：打开智联 → 登录 → 进入推荐首页 → 刷新页面 → 选择推荐页 → 采集。电话不可见或需验证码的候选人不会被强行绕过。</div>
+      <div class="hint">推荐流程：选择平台 → 打开浏览器 → 登录 → 进入推荐/候选人列表 → 刷新页面 → 选择页面 → 采集。电话不可见或需验证码的候选人不会被强行绕过。</div>
       <label>兜底文本导入</label>
       <textarea id="pasteText" placeholder="自动采集失败时，可粘贴一段或多段简历文本；每条至少包含手机号。"></textarea>
       <button class="secondary" onclick="importText()">识别并入库</button>
@@ -60,14 +67,14 @@
 </main>
 <dialog id="detail"><div class="modal-hd"><b id="detailTitle">详情</b><button class="secondary" onclick="detail.close()">关闭</button></div><div id="detailBody" class="modal-bd"></div></dialog>
 <script>
-const $=id=>document.getElementById(id); let lastRows=[], progressTimer=null; const msg=t=>$('msg').innerText=t;
-async function api(url,opt={}){let r;try{r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt})}catch(e){throw new Error('本地服务未运行，请重新打开 HR简历台账.exe')};const j=await r.json();if(!r.ok||j.error)throw new Error(j.error||r.statusText);return j}
+const $=id=>document.getElementById(id); let lastRows=[], progressTimer=null; const msg=t=>$('msg').innerText=t; const currentPlatform=()=>($('platform')&&$('platform').value)||'zhaopin';
+async function api(url,opt={}){let r;try{r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt})}catch(e){throw new Error('本地服务未运行，请重新启动 python app.py')};const j=await r.json();if(!r.ok||j.error)throw new Error(j.error||r.statusText);return j}
 function setTrace(items){const box=$('trace');box.innerHTML='';items.forEach((it,i)=>{const d=document.createElement('div');d.className='step';d.innerHTML=`<div class="dot">${i+1}</div><div><b>${esc(it.title||it.reason||'记录')}</b><span>${esc(it.text||it.url||JSON.stringify(it))}</span></div>`;box.appendChild(d)})}
 async function health(){try{const j=await api('/api/health');msg(`服务正常；导出字段：${j.export_fields.join(', ')}`)}catch(e){msg('服务异常：'+e.message)}}
-async function launchBrowser(){try{msg('正在打开智联招聘浏览器...');await api('/api/launch-browser',{method:'POST',body:'{}'});msg('已打开。请登录智联并进入推荐首页。');setTimeout(loadTabs,1500)}catch(e){msg('启动失败：'+e.message)}}
+async function launchBrowser(){try{const platform=currentPlatform();msg('正在打开招聘平台浏览器...');await api('/api/launch-browser',{method:'POST',body:JSON.stringify({platform})});msg('已打开。请登录所选平台并进入推荐/候选人列表。');setTimeout(loadTabs,1500)}catch(e){msg('启动失败：'+e.message)}}
 async function loadTabs(){try{const j=await api('/api/tabs');const s=$('tabs');s.innerHTML='';j.tabs.forEach(t=>{const o=document.createElement('option');o.value=t.ws;o.textContent=(t.title||'无标题')+' ｜ '+t.url;s.appendChild(o)});msg(`找到 ${j.tabs.length} 个页面`)}catch(e){msg('读取页面失败：'+e.message)}}
 function pollProgress(run){clearInterval(progressTimer);progressTimer=setInterval(async()=>{try{const p=await api('/api/progress?run='+encodeURIComponent(run));msg(`${p.message||'采集中'} ${p.current||0}/${p.total||0}`);if(p.items&&p.items.length)setTrace(p.items.map(x=>({title:`${x.status||'处理中'}｜${x.name||''}`,text:`电话：${x.phone||'未找到'}\n${x.reason||''}\n完整详情：${x.detail_opened?'已打开':'未打开/回落'}`})));if(p.done){clearInterval(progressTimer);loadCandidates()}}catch(e){}},700)}
-async function collectRecommendations(){const run='r'+Date.now();msg('后台采集中，正在实时跟进...');pollProgress(run);try{const j=await api('/api/collect-recommendations',{method:'POST',body:JSON.stringify({run,keywords:$('keywords').value,limit:500})});const r=j.match_report||{total:0,matched:j.saved.length,percent:0,items:[]};$('analysisTotal').innerText=r.total;$('analysisMatched').innerText=r.matched;$('analysisPercent').innerText=r.percent+'%';msg(`完成：共 ${r.total} 人，符合 ${r.matched} 人，占比 ${r.percent}%；已入库 ${j.saved.length} 人`);loadCandidates()}catch(e){clearInterval(progressTimer);msg('采集失败：'+e.message)}}
+async function collectRecommendations(){const run='r'+Date.now();msg('后台采集中，正在实时跟进...');pollProgress(run);try{const j=await api('/api/collect-recommendations',{method:'POST',body:JSON.stringify({run,keywords:$('keywords').value,limit:500,platform:currentPlatform()})});const r=j.match_report||{total:0,matched:j.saved.length,percent:0,items:[]};$('analysisTotal').innerText=r.total;$('analysisMatched').innerText=r.matched;$('analysisPercent').innerText=r.percent+'%';msg(`完成：共 ${r.total} 人，符合 ${r.matched} 人，占比 ${r.percent}%；已入库 ${j.saved.length} 人`);loadCandidates()}catch(e){clearInterval(progressTimer);msg('采集失败：'+e.message)}}
 async function captureOne(){const ws=$('tabs').value;if(!ws)return msg('先选择完整简历页');try{const j=await api('/api/capture',{method:'POST',body:JSON.stringify({ws,keywords:$('keywords').value})});await api('/api/candidates',{method:'POST',body:JSON.stringify(j.candidate)});setTrace([{title:'已保存当前简历页',text:j.candidate.work_trace||''}]);msg('已保存当前完整简历页');loadCandidates()}catch(e){msg('采集失败：'+e.message)}}
 async function importText(){try{const j=await api('/api/import-text',{method:'POST',body:JSON.stringify({text:$('pasteText').value,keywords:$('keywords').value})});setTrace((j.candidates||[]).map(c=>({title:'文本识别：'+(c.name||c.phone),text:c.matched_experience||c.phone||''})));msg(`文本识别完成：保存 ${j.saved} 人`);loadCandidates()}catch(e){msg('导入失败：'+e.message)}}
 async function loadCandidates(){const j=await api('/api/candidates');lastRows=j.candidates||[];$('count').innerText=lastRows.length;$('withPhone').innerText=lastRows.filter(x=>x.phone).length;$('withMatch').innerText=lastRows.filter(x=>x.matched_experience).length;const box=$('ledger');box.innerHTML='';if(!lastRows.length){box.innerHTML='<div class="empty">暂无入库候选人</div>';return}lastRows.forEach(c=>{const div=document.createElement('div');div.className='card';div.innerHTML=`<div class="card-top"><div><div class="name">${esc(c.name||'未识别姓名')}</div><div class="phone">${esc(c.phone||'无电话')}</div></div><button class="danger" onclick="deleteCandidate(${c.id})">删除</button></div><div class="meta"><span class="pill">年龄：${esc(c.age||'未识别')}</span><span class="pill">性别：${esc(c.gender||'未识别')}</span><span class="pill">学历：${esc(c.education||'未识别')}</span><span class="pill">邮箱：${esc(c.email||'无')}</span><span class="pill">微信：${esc(c.wechat||'无')}</span></div><div class="match"><b>匹配经历摘选：</b>\n${esc(c.match_excerpt||c.matched_experience||'暂未提取到明确匹配经历')}</div><div class="match"><b>个人基本资料：</b>\n${esc(c.profile_summary||'暂无可读个人资料')}</div><div class="card-actions"><button class="ghost" onclick="showDetail(${c.id})">查看完整简历</button></div>`;box.appendChild(div)})}
