@@ -29,6 +29,7 @@ else:
 DATA_DIR = RUNTIME_DIR / "data"
 STATIC_DIR = ROOT / "static"
 DB_PATH = DATA_DIR / "hr_resume_ledger.sqlite3"
+PDF_DIR = DATA_DIR / "resume_pdfs"
 APP_HOST = os.environ.get("HR_LEDGER_HOST", os.environ.get("APP_HOST", "127.0.0.1"))
 APP_PORT = int(os.environ.get("HR_LEDGER_PORT", os.environ.get("APP_PORT", "8765")))
 CDP_PORT = int(os.environ.get("HR_LEDGER_CDP_PORT", "9222"))
@@ -99,12 +100,13 @@ def init_db():
                 resume TEXT NOT NULL DEFAULT '',
                 work_trace TEXT NOT NULL DEFAULT '',
                 source_url TEXT NOT NULL DEFAULT '',
+                local_pdf_path TEXT NOT NULL DEFAULT '',
                 raw_text TEXT NOT NULL DEFAULT ''
             )
             """
         )
         cols = {r[1] for r in con.execute("PRAGMA table_info(candidates)")}
-        for col in ["education", "age", "age_years", "gender", "email", "wechat", "basic_info", "status", "job_desc", "matched_experience", "resume", "work_trace", "source_url", "raw_text"]:
+        for col in ["education", "age", "age_years", "gender", "email", "wechat", "basic_info", "status", "job_desc", "matched_experience", "resume", "work_trace", "source_url", "local_pdf_path", "raw_text"]:
             if col not in cols:
                 con.execute(f"ALTER TABLE candidates ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
 
@@ -693,6 +695,63 @@ def eval_page(ws, expression, timeout=10):
     result = resp.get("result", {}).get("result", {})
     return result.get("value", "")
 
+
+def safe_filename(text):
+    return re.sub(r"[^\w\u4e00-\u9fa5.-]+", "_", (text or "").strip()).strip("_")[:80] or "resume"
+
+
+def zhaopin_export_current_pdf(ws, candidate=None):
+    """Call Zhilian's own '存至本地' PDF flow for the currently opened resume."""
+    script = r"""
+(async () => {
+  const perf = performance.getEntriesByType('resource').map(x => x.name).reverse();
+  const api = perf.find(u => u.includes('/api/resume/createExportTask')) || perf.find(u => u.includes('/api/resume/')) || location.href;
+  const u = new URL(api, location.href);
+  const loc = new URL(location.href);
+  const pageReq = u.searchParams.get('x-zp-page-request-id') || '';
+  const clientId = u.searchParams.get('x-zp-client-id') || '';
+  const jobNumber = loc.searchParams.get('jobNumber') || '';
+  const resumeNumber = loc.searchParams.get('resumeNumber') || '';
+  if (!jobNumber || !resumeNumber) return JSON.stringify({ok:false, error:'缺少 jobNumber/resumeNumber', url: location.href});
+  const query = () => new URLSearchParams({'_': Date.now(), 'x-zp-page-request-id': pageReq, 'x-zp-client-id': clientId}).toString();
+  const taskResp = await fetch('/api/resume/createExportTask?' + query(), {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({fileType:'PDF', exportItems:[{jobNumber, resumeNumber, resumeLanguage:'1'}], enterScene:'RECOMMEND_TAB'})
+  });
+  const task = await taskResp.json();
+  const fileId = task.data || task.taskId;
+  if (!fileId) return JSON.stringify({ok:false, error:'未返回 fileId', task});
+  let file = null;
+  for (let i = 0; i < 8; i++) {
+    await new Promise(r => setTimeout(r, i ? 1200 : 1800));
+    const fileResp = await fetch('/api/resume/saveLocal/getFile?' + query(), {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({fileId})
+    });
+    file = await fileResp.json();
+    if (file && file.data && file.data.state === 'READY' && file.data.fileUrl) break;
+  }
+  return JSON.stringify({ok: !!(file && file.data && file.data.fileUrl), jobNumber, resumeNumber, fileId, file});
+})()
+"""
+    raw = eval_page(ws, script, timeout=25)
+    info = json.loads(raw or "{}")
+    file_url = (((info.get("file") or {}).get("data") or {}).get("fileUrl") or "").strip()
+    if not info.get("ok") or not file_url:
+        return {"ok": False, "error": info.get("error") or "PDF 文件未就绪", "info": info}
+    PDF_DIR.mkdir(parents=True, exist_ok=True)
+    name = safe_filename((candidate or {}).get("name") or info.get("resumeNumber") or "resume")
+    filename = f"{name}_{info.get('resumeNumber','')}_{int(time.time())}.pdf"
+    path = PDF_DIR / filename
+    with urllib.request.urlopen(file_url, timeout=30) as resp:
+        data = resp.read()
+    if not data.startswith(b"%PDF"):
+        return {"ok": False, "error": "下载结果不是 PDF", "bytes": len(data)}
+    path.write_bytes(data)
+    return {"ok": True, "path": str(path), "url": file_url, "resumeNumber": info.get("resumeNumber"), "jobNumber": info.get("jobNumber")}
+
 PAGE_SCRIPT = r"""
 (() => JSON.stringify({
   title: document.title || '',
@@ -804,7 +863,7 @@ def merge_card_detail(card, detail):
     row = dict(card)
     for key in ["name", "phone", "email", "wechat", "education", "age", "age_years", "gender", "basic_info", "status", "job_desc", "matched_experience"]:
         row[key] = detail.get(key) or row.get(key, "")
-    for key in ["resume", "raw_text", "source_url", "source_title"]:
+    for key in ["resume", "raw_text", "source_url", "source_title", "local_pdf_path"]:
         if detail.get(key):
             row[key] = detail.get(key)
     row["detail_opened"] = True
@@ -838,6 +897,17 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
         detail = extract_candidate(page, job_keywords)
         detail["source_url"] = page.get("url", "")
         detail["source_title"] = page.get("title", "")
+        if platform == "zhaopin":
+            prospective = merge_card_detail(candidate, detail)
+            if semantic_match_score(prospective, job_keywords).get("matched"):
+                try:
+                    pdf = zhaopin_export_current_pdf(ws, prospective)
+                    if pdf.get("ok"):
+                        detail["local_pdf_path"] = pdf.get("path", "")
+                    else:
+                        detail["pdf_error"] = pdf.get("error", "")
+                except Exception as e:
+                    detail["pdf_error"] = str(e)
         return detail, ""
     except Exception as e:
         return None, str(e)
@@ -866,17 +936,18 @@ def save_candidate(candidate):
     resume = (candidate.get("resume") or candidate.get("raw_text") or "").strip()
     work_trace = candidate.get("work_trace", "") or ""
     source_url = candidate.get("source_url", "") or ""
+    local_pdf_path = candidate.get("local_pdf_path", "") or ""
     if not (name or phone or resume):
         return None
     with sqlite3.connect(DB_PATH) as con:
         if phone:
             row = con.execute("SELECT id FROM candidates WHERE phone=? LIMIT 1", (phone,)).fetchone()
             if row:
-                con.execute("UPDATE candidates SET name=?, phone=?, email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=? WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, row[0]))
+                con.execute("UPDATE candidates SET name=?, phone=?, email=?, wechat=?, education=?, age=?, age_years=?, gender=?, basic_info=?, status=?, job_desc=?, matched_experience=?, resume=?, raw_text=?, work_trace=?, source_url=?, local_pdf_path=COALESCE(NULLIF(?,''), local_pdf_path) WHERE id=?", (name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, local_pdf_path, row[0]))
                 return row[0]
         cur = con.execute(
-            "INSERT INTO candidates (created_at,name,phone,email,wechat,education,age,age_years,gender,basic_info,status,job_desc,matched_experience,resume,raw_text,work_trace,source_url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url),
+            "INSERT INTO candidates (created_at,name,phone,email,wechat,education,age,age_years,gender,basic_info,status,job_desc,matched_experience,resume,raw_text,work_trace,source_url,local_pdf_path) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), name, phone, email, wechat, education, age, age_years, gender, basic_info, status, job_desc, hit_exp, resume, resume, work_trace, source_url, local_pdf_path),
         )
         return cur.lastrowid
 
@@ -927,8 +998,8 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
                 final_items.append(row)
                 if row.get("matched"):
                     cid = save_candidate(row)
-                    saved.append({"id": cid, "name": row.get("name", ""), "phone": row.get("phone", ""), "score": row.get("score", 0), "reason": row.get("reason", ""), "detail_opened": row.get("detail_opened", False)})
-                    progress_items.append({"name": row.get("name", ""), "phone": row.get("phone", ""), "status": "已入库", "detail_opened": row.get("detail_opened", False)})
+                    saved.append({"id": cid, "name": row.get("name", ""), "phone": row.get("phone", ""), "score": row.get("score", 0), "reason": row.get("reason", ""), "detail_opened": row.get("detail_opened", False), "has_pdf": bool(row.get("local_pdf_path"))})
+                    progress_items.append({"name": row.get("name", ""), "phone": row.get("phone", ""), "status": "已入库" + ("｜PDF已保存" if row.get("local_pdf_path") else ""), "detail_opened": row.get("detail_opened", False)})
                     if err:
                         skipped.append({"name": cand.get("name", ""), "reason": "详情打开失败，已保存推荐页摘要：" + err})
                 else:
@@ -982,8 +1053,15 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
 
 def list_candidates():
     with sqlite3.connect(DB_PATH) as con:
-        cur = con.execute("SELECT id,created_at,name,phone,email,wechat,education,age,age_years,gender,basic_info,status,job_desc,matched_experience,COALESCE(NULLIF(resume,''),raw_text) AS resume,work_trace,source_url FROM candidates ORDER BY id DESC")
+        cur = con.execute("SELECT id,created_at,name,phone,email,wechat,education,age,age_years,gender,basic_info,status,job_desc,matched_experience,COALESCE(NULLIF(resume,''),raw_text) AS resume,work_trace,source_url,local_pdf_path FROM candidates ORDER BY id DESC")
         return [build_display_row(x) for x in rows_to_dicts(cur)]
+
+
+def get_candidate(cid):
+    with sqlite3.connect(DB_PATH) as con:
+        cur = con.execute("SELECT id,created_at,name,phone,email,wechat,education,age,age_years,gender,basic_info,status,job_desc,matched_experience,COALESCE(NULLIF(resume,''),raw_text) AS resume,work_trace,source_url,local_pdf_path FROM candidates WHERE id=? LIMIT 1", (int(cid),))
+        rows = rows_to_dicts(cur)
+        return build_display_row(rows[0]) if rows else None
 
 
 def limit_lines(text, max_lines):
@@ -1026,6 +1104,7 @@ def build_display_row(row):
     summary_src = row.get("basic_info", "") or row.get("resume", "")
     d["profile_summary"] = compose_profile_summary(summary_src, matched, row)
     d["match_excerpt"] = matched or "已打开完整简历，但暂未提取到明确匹配经历"
+    d["has_pdf"] = bool(row.get("local_pdf_path") and Path(row.get("local_pdf_path", "")).exists())
     return d
 
 
@@ -1160,6 +1239,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/progress":
                 qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 self.send_json(get_progress((qs.get("run") or ["default"])[0]))
+            elif path == "/api/candidate-pdf":
+                qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                self.serve_candidate_pdf((qs.get("id") or [""])[0])
             elif path == "/export.csv":
                 self.export_csv()
             elif path == "/export.xlsx":
@@ -1200,6 +1282,23 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers(); self.wfile.write(body)
+
+    def serve_candidate_pdf(self, cid):
+        row = get_candidate(cid)
+        pdf = Path((row or {}).get("local_pdf_path") or "")
+        try:
+            pdf = pdf.resolve()
+            if not str(pdf).startswith(str(PDF_DIR.resolve())) or not pdf.exists():
+                self.send_json({"error": "该候选人还没有可预览的本地 PDF"}, 404)
+                return
+            body = pdf.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Disposition", f'inline; filename="{pdf.name}"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+        except Exception as e:
+            self.send_json({"error": str(e)}, 500)
 
     def export_csv(self):
         body = build_csv_bytes(list_candidates())

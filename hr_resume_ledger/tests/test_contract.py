@@ -44,3 +44,23 @@ def test_delete_candidate(tmp_path, monkeypatch):
     assert app.delete_candidate(cid) is True
     assert app.list_candidates() == []
 
+
+def test_candidate_pdf_path_is_stored_and_marked(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DB_PATH", tmp_path / "x.sqlite3")
+    monkeypatch.setattr(app, "PDF_DIR", tmp_path / "resume_pdfs")
+    app.PDF_DIR.mkdir()
+    pdf = app.PDF_DIR / "张三.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    app.init_db()
+    app.save_candidate({"name": "张三", "phone": "13800138000", "resume": "简历", "local_pdf_path": str(pdf)})
+    row = app.list_candidates()[0]
+    assert row["local_pdf_path"] == str(pdf)
+    assert row["has_pdf"] is True
+
+
+def test_frontend_prefers_pdf_preview():
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    assert "/api/candidate-pdf?id=" in html
+    assert "预览PDF简历" in html
+    assert "PDF：${c.has_pdf?'已保存':'未生成'}" in html
+

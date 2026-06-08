@@ -17,6 +17,7 @@ Use this skill for the `hr_resume_ledger` app: recruiting recommendation pages, 
 6. Evaluate candidates by:
    - full recommendation pool total `N` (default sample limit: 500);
    - opening each plausible candidate detail page;
+   - for Zhilian matched candidates, using the platform `存至本地` flow to generate the candidate-specific PDF and preview that PDF by default;
    - extracting phone, email, WeChat, age, gender, education, status, basic info, related experience;
    - prioritizing related role / career-experience matching;
    - treating age, phone, and education as profile data unless the user explicitly says they are required;

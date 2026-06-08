@@ -6,6 +6,8 @@ It is intended for 1:1 deployment on another Windows computer: same page, same l
 
 Current UI includes a recruitment platform switcher: 智联招聘 / BOSS直聘 / 猎聘 / 通用页面.
 
+For Zhilian candidates, matched resumes are traced to the platform's own **存至本地** PDF flow and saved per candidate under local runtime data; the ledger previews the candidate's PDF first and falls back to text only when PDF generation fails.
+
 ## Contents
 
 ```text
