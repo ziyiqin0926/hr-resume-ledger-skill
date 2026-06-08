@@ -1,55 +1,81 @@
-﻿# HR Resume Ledger Workflow Skill
+﻿# HR Resume Ledger 1:1 App + Codex Skill
 
-Codex Skill for HR resume recommendation-page scraping, full-resume detail reading, cross-industry career-experience matching, and ledger export.
+This repository now contains the **complete HR resume ledger app** plus the Codex Skill workflow.
 
-## Important: what this repo contains
+It is intended for 1:1 deployment on another Windows computer: same page, same local app logic, same export workflow.
 
-This repository contains the **Codex Skill workflow**, not the full HR ledger application source.
-
-The one-click script expects the target computer already has a project folder containing:
+## Contents
 
 ```text
-hr_resume_ledger/app.py
-hr_resume_ledger/static/index.html
+hr_resume_ledger/                         # complete runnable app
+  app.py                                  # local Python server + scraping/matching/export logic
+  static/index.html                       # exact browser UI
+  tests/                                  # regression tests
+  dist/HR简历台账.exe                     # optional built Windows exe, if usable on target PC
+skills/hr-resume-ledger-workflow/         # Codex Skill
+  SKILL.md
+  scripts/bootstrap_hr_resume_ledger.ps1
 ```
-
-If the other computer does not have that app project, this skill can guide Codex, but the bootstrap script cannot start the app.
 
 ## Requirements on another Windows computer
 
 - Windows + PowerShell
-- Python available as `python`
-- Google Chrome installed, or `chrome.exe` available in PATH
-- Codex installed and able to load local skills
-- The HR ledger app project copied/cloned to that computer
-- Recruiting website login must be done manually in the browser
+- Google Chrome
+- Python available as `python` if running from source
+- Codex if you want to use the Skill workflow
+- Manual login to recruiting websites is still required
 
-The current app uses Python standard library only for the local server. Tests require `pytest` if you want to run them.
+The local app itself mainly uses Python standard library. Tests require `pytest`.
 
-## Install manually
+## Run from source
 
-Copy this folder to Codex skills:
+```powershell
+git clone https://github.com/ziyiqin0926/hr-resume-ledger-skill.git
+cd hr-resume-ledger-skill\hr_resume_ledger
+python app.py
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765/
+```
+
+## Run with Skill bootstrap
+
+After installing the skill, point `-ProjectDir` to this repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.codex\skills\hr-resume-ledger-workflow\scripts\bootstrap_hr_resume_ledger.ps1" -ProjectDir "C:\path\to\hr-resume-ledger-skill"
+```
+
+## Install Codex Skill manually
 
 ```powershell
 Copy-Item -Recurse .\skills\hr-resume-ledger-workflow "$env:USERPROFILE\.codex\skills\hr-resume-ledger-workflow" -Force
 ```
 
-## One-click start after install
-
-Point `-ProjectDir` to the folder that contains `hr_resume_ledger`:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.codex\skills\hr-resume-ledger-workflow\scripts\bootstrap_hr_resume_ledger.ps1" -ProjectDir "C:\path\to\project"
-```
-
-## GitHub Skill path
+GitHub Skill path:
 
 ```text
 skills/hr-resume-ledger-workflow
 ```
 
-## Known limits
+## Runtime data intentionally not included
 
-- This skill does not bypass login, verification, anti-bot, or website permissions.
-- It relies on the local HR ledger app implementation being present.
-- Cross-site page structure may change; if scraping breaks, use Codex with this skill to inspect and patch the app.
+For privacy/security, this repository does not include:
+
+- browser login profiles
+- local SQLite ledger data
+- cookies/session state
+- candidate exports generated locally
+
+These are regenerated on each computer under `hr_resume_ledger/data/`.
+
+## Validation
+
+```powershell
+cd hr_resume_ledger
+python -m py_compile app.py
+python -m pytest -q
+```

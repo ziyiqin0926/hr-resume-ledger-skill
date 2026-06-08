@@ -1,0 +1,82 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>智联推荐候选人采集台账</title>
+  <style>
+    :root{--bg:#f6f7fb;--card:#fff;--ink:#111827;--muted:#667085;--line:#e5e7eb;--brand:#0f766e;--brand2:#b45309;--danger:#b91c1c;--soft:#eef7f4}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:"Microsoft YaHei UI","Segoe UI",sans-serif;font-size:14px}
+    header{height:68px;padding:0 24px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
+    h1{margin:0;font-size:20px}.sub{margin-top:4px;color:var(--muted);font-size:12px}.actions{display:flex;gap:10px;align-items:center}
+    button,a.btn{border:0;border-radius:10px;background:var(--brand);color:#fff;padding:10px 14px;font-weight:700;cursor:pointer;text-decoration:none;white-space:nowrap}.secondary{background:#344054}.ghost{background:#fff;color:var(--brand);border:1px solid #b7ddd5}.warn{background:var(--brand2)}.danger{background:var(--danger)}
+    main{display:grid;grid-template-columns:320px minmax(360px,1fr) 430px;gap:16px;padding:16px;height:calc(100vh - 68px)}
+    .panel{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 8px 24px rgba(15,23,42,.05);min-height:0;overflow:hidden;display:flex;flex-direction:column}.panel-hd{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}.panel-bd{padding:14px 16px;overflow:auto;min-height:0}.stack{display:grid;gap:12px}
+    label{font-size:12px;color:var(--muted);font-weight:700}textarea,select,input{width:100%;border:1px solid var(--line);border-radius:12px;background:#fff;padding:10px;font:inherit}textarea{min-height:130px;resize:vertical}.hint{background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:10px;color:var(--muted);font-size:12px;line-height:1.6}.msg{font-size:12px;color:#475467;white-space:pre-wrap}
+    .progress{display:grid;gap:10px}.step{display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid var(--line);border-radius:12px;background:#fff}.dot{width:22px;height:22px;border-radius:50%;background:var(--soft);color:var(--brand);display:grid;place-items:center;font-weight:900;font-size:12px;flex:0 0 auto}.step b{display:block;margin-bottom:3px}.step span{color:var(--muted);font-size:12px;line-height:1.5}
+    .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.stat{background:#f8fafc;border:1px solid var(--line);border-radius:12px;padding:12px}.stat b{font-size:22px}.stat span{display:block;color:var(--muted);font-size:12px;margin-top:4px}
+    .cards{display:grid;gap:10px}.card{border:1px solid var(--line);border-radius:14px;padding:12px;background:#fff}.card-top{display:flex;justify-content:space-between;gap:10px}.name{font-size:17px;font-weight:900}.phone{color:var(--brand);font-weight:800}.meta{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.pill{font-size:12px;padding:4px 8px;border-radius:99px;background:#eef2ff;color:#3730a3}.match{font-size:13px;line-height:1.55;background:#f8fafc;border-radius:10px;padding:8px;max-height:90px;overflow:auto;white-space:pre-wrap}.card-actions{display:flex;gap:8px;margin-top:10px}.empty{height:180px;border:1px dashed #cbd5e1;border-radius:14px;display:grid;place-items:center;color:var(--muted);text-align:center;padding:20px}
+    dialog{border:0;border-radius:16px;max-width:900px;width:82vw;max-height:82vh;padding:0;box-shadow:0 24px 80px rgba(15,23,42,.35)}dialog::backdrop{background:rgba(15,23,42,.45)}.modal-hd{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}.modal-bd{padding:16px;white-space:pre-wrap;line-height:1.7;max-height:65vh;overflow:auto}
+    @media(max-width:1200px){main{grid-template-columns:300px 1fr}.right{grid-column:1/-1}}@media(max-width:820px){main{display:block;height:auto}.panel{margin:12px 0}}
+  </style>
+</head>
+<body>
+<header>
+  <div><h1>智联推荐候选人采集台账</h1><div class="sub">按筛选要求打开完整简历，提取姓名、电话、学历、命中经历，形成可导出台账。</div></div>
+  <div class="actions"><button class="ghost" onclick="health()">检查服务</button><a class="btn" href="/export.xlsx">导出规范版 XLSX</a><a class="btn ghost" href="/export.csv">导出 CSV</a></div>
+</header>
+<main>
+  <section class="panel">
+    <div class="panel-hd"><b>1. 筛选要求</b></div>
+    <div class="panel-bd stack">
+      <label>岗位/人选要求</label>
+      <textarea id="keywords" placeholder="例：本科 Python SQL 数据分析 3年\n系统会用这些词判断候选人的工作经历是否命中"></textarea>
+      <button onclick="launchBrowser()">打开智联招聘浏览器</button>
+      <button class="secondary" onclick="loadTabs()">检查智联页面</button>
+      <select id="tabs"></select>
+      <button class="warn" onclick="collectRecommendations()">自动分析智联推荐页</button>
+      <button onclick="captureOne()">采集当前完整简历页</button>
+      <div class="hint">推荐流程：打开智联 → 登录 → 进入推荐首页 → 刷新页面 → 选择推荐页 → 采集。电话不可见或需验证码的候选人不会被强行绕过。</div>
+      <label>兜底文本导入</label>
+      <textarea id="pasteText" placeholder="自动采集失败时，可粘贴一段或多段简历文本；每条至少包含手机号。"></textarea>
+      <button class="secondary" onclick="importText()">识别并入库</button>
+      <div id="msg" class="msg"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-hd"><b>2. 识别结果统计</b><button class="ghost" onclick="loadCandidates()">刷新</button></div>
+    <div class="panel-bd stack">
+      <div class="stats"><div class="stat"><b id="analysisTotal">0</b><span>本次分析人数</span></div><div class="stat"><b id="analysisMatched">0</b><span>符合人数</span></div><div class="stat"><b id="analysisPercent">0%</b><span>符合比例</span></div></div>
+      <div class="stats"><div class="stat"><b id="count">0</b><span>入库人数</span></div><div class="stat"><b id="withPhone">0</b><span>有电话</span></div><div class="stat"><b id="withMatch">0</b><span>命中经历</span></div></div>
+      <div class="progress" id="trace"><div class="empty">采集后这里显示每个候选人的匹配分数、命中关键词和符合原因。</div></div>
+    </div>
+  </section>
+
+  <section class="panel right">
+    <div class="panel-hd"><b>3. 最终台账</b><button class="danger" onclick="clearCandidates()">一键清空</button></div>
+    <div class="panel-bd"><div id="ledger" class="cards"></div></div>
+  </section>
+</main>
+<dialog id="detail"><div class="modal-hd"><b id="detailTitle">详情</b><button class="secondary" onclick="detail.close()">关闭</button></div><div id="detailBody" class="modal-bd"></div></dialog>
+<script>
+const $=id=>document.getElementById(id); let lastRows=[], progressTimer=null; const msg=t=>$('msg').innerText=t;
+async function api(url,opt={}){let r;try{r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt})}catch(e){throw new Error('本地服务未运行，请重新打开 HR简历台账.exe')};const j=await r.json();if(!r.ok||j.error)throw new Error(j.error||r.statusText);return j}
+function setTrace(items){const box=$('trace');box.innerHTML='';items.forEach((it,i)=>{const d=document.createElement('div');d.className='step';d.innerHTML=`<div class="dot">${i+1}</div><div><b>${esc(it.title||it.reason||'记录')}</b><span>${esc(it.text||it.url||JSON.stringify(it))}</span></div>`;box.appendChild(d)})}
+async function health(){try{const j=await api('/api/health');msg(`服务正常；导出字段：${j.export_fields.join(', ')}`)}catch(e){msg('服务异常：'+e.message)}}
+async function launchBrowser(){try{msg('正在打开智联招聘浏览器...');await api('/api/launch-browser',{method:'POST',body:'{}'});msg('已打开。请登录智联并进入推荐首页。');setTimeout(loadTabs,1500)}catch(e){msg('启动失败：'+e.message)}}
+async function loadTabs(){try{const j=await api('/api/tabs');const s=$('tabs');s.innerHTML='';j.tabs.forEach(t=>{const o=document.createElement('option');o.value=t.ws;o.textContent=(t.title||'无标题')+' ｜ '+t.url;s.appendChild(o)});msg(`找到 ${j.tabs.length} 个页面`)}catch(e){msg('读取页面失败：'+e.message)}}
+function pollProgress(run){clearInterval(progressTimer);progressTimer=setInterval(async()=>{try{const p=await api('/api/progress?run='+encodeURIComponent(run));msg(`${p.message||'采集中'} ${p.current||0}/${p.total||0}`);if(p.items&&p.items.length)setTrace(p.items.map(x=>({title:`${x.status||'处理中'}｜${x.name||''}`,text:`电话：${x.phone||'未找到'}\n${x.reason||''}\n完整详情：${x.detail_opened?'已打开':'未打开/回落'}`})));if(p.done){clearInterval(progressTimer);loadCandidates()}}catch(e){}},700)}
+async function collectRecommendations(){const run='r'+Date.now();msg('后台采集中，正在实时跟进...');pollProgress(run);try{const j=await api('/api/collect-recommendations',{method:'POST',body:JSON.stringify({run,keywords:$('keywords').value,limit:500})});const r=j.match_report||{total:0,matched:j.saved.length,percent:0,items:[]};$('analysisTotal').innerText=r.total;$('analysisMatched').innerText=r.matched;$('analysisPercent').innerText=r.percent+'%';msg(`完成：共 ${r.total} 人，符合 ${r.matched} 人，占比 ${r.percent}%；已入库 ${j.saved.length} 人`);loadCandidates()}catch(e){clearInterval(progressTimer);msg('采集失败：'+e.message)}}
+async function captureOne(){const ws=$('tabs').value;if(!ws)return msg('先选择完整简历页');try{const j=await api('/api/capture',{method:'POST',body:JSON.stringify({ws,keywords:$('keywords').value})});await api('/api/candidates',{method:'POST',body:JSON.stringify(j.candidate)});setTrace([{title:'已保存当前简历页',text:j.candidate.work_trace||''}]);msg('已保存当前完整简历页');loadCandidates()}catch(e){msg('采集失败：'+e.message)}}
+async function importText(){try{const j=await api('/api/import-text',{method:'POST',body:JSON.stringify({text:$('pasteText').value,keywords:$('keywords').value})});setTrace((j.candidates||[]).map(c=>({title:'文本识别：'+(c.name||c.phone),text:c.matched_experience||c.phone||''})));msg(`文本识别完成：保存 ${j.saved} 人`);loadCandidates()}catch(e){msg('导入失败：'+e.message)}}
+async function loadCandidates(){const j=await api('/api/candidates');lastRows=j.candidates||[];$('count').innerText=lastRows.length;$('withPhone').innerText=lastRows.filter(x=>x.phone).length;$('withMatch').innerText=lastRows.filter(x=>x.matched_experience).length;const box=$('ledger');box.innerHTML='';if(!lastRows.length){box.innerHTML='<div class="empty">暂无入库候选人</div>';return}lastRows.forEach(c=>{const div=document.createElement('div');div.className='card';div.innerHTML=`<div class="card-top"><div><div class="name">${esc(c.name||'未识别姓名')}</div><div class="phone">${esc(c.phone||'无电话')}</div></div><button class="danger" onclick="deleteCandidate(${c.id})">删除</button></div><div class="meta"><span class="pill">年龄：${esc(c.age||'未识别')}</span><span class="pill">性别：${esc(c.gender||'未识别')}</span><span class="pill">学历：${esc(c.education||'未识别')}</span><span class="pill">邮箱：${esc(c.email||'无')}</span><span class="pill">微信：${esc(c.wechat||'无')}</span></div><div class="match"><b>匹配经历摘选：</b>\n${esc(c.match_excerpt||c.matched_experience||'暂未提取到明确匹配经历')}</div><div class="match"><b>个人基本资料：</b>\n${esc(c.profile_summary||'暂无可读个人资料')}</div><div class="card-actions"><button class="ghost" onclick="showDetail(${c.id})">查看完整简历</button></div>`;box.appendChild(div)})}
+function showDetail(id){const c=lastRows.find(x=>x.id===id);if(!c)return;$('detailTitle').innerText='完整简历';$('detailBody').innerText=c.resume||'';detail.showModal()}
+async function deleteCandidate(id){if(!confirm('确认删除这条候选人？'))return;try{await api('/api/delete-candidate',{method:'POST',body:JSON.stringify({id})});msg('已删除');loadCandidates()}catch(e){msg('删除失败：'+e.message)}}
+async function clearCandidates(){if(!confirm('确认清空全部台账？'))return;try{await api('/api/clear-candidates',{method:'POST',body:'{}'});msg('已清空，可重新抓取');loadCandidates()}catch(e){msg('清空失败：'+e.message)}}
+function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+health();loadCandidates();
+</script>
+</body>
+</html>
+

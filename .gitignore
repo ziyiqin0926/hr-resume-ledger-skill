@@ -1,2 +1,10 @@
-﻿# Skill package for Codex.
-# See skills/hr-resume-ledger-workflow/SKILL.md
+﻿# Runtime/private data
+hr_resume_ledger/data/
+hr_resume_ledger/build/
+hr_resume_ledger/__pycache__/
+hr_resume_ledger/.pytest_cache/
+*.pyc
+*.pyo
+*.sqlite3
+*.db
+*.log
