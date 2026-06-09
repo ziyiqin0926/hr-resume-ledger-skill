@@ -117,7 +117,7 @@ def test_zhaopin_resume_url_is_backtrack_anchor():
     assert "原简历可直达" in row["reason"]
 
 
-def test_zhaopin_candidate_requires_local_pdf_before_ledger():
+def test_zhaopin_candidate_with_resume_link_can_enter_without_pdf():
     row = {
         "matched": True,
         "score": 80,
@@ -127,8 +127,21 @@ def test_zhaopin_candidate_requires_local_pdf_before_ledger():
         "pdf_required": True,
         "source_url": "https://rd6.zhaopin.com/app/recommend?jobNumber=J1&resumeNumber=R1",
     }
+    assert app.should_enter_ledger(row) is True
+    assert "原简历可直达" in row["reason"]
+
+
+def test_zhaopin_candidate_without_any_backtrack_route_is_blocked():
+    row = {
+        "matched": True,
+        "score": 80,
+        "matched_experience": "做过建筑方案设计",
+        "detail_opened": True,
+        "reason": "",
+        "pdf_required": True,
+    }
     assert app.should_enter_ledger(row) is False
-    assert "缺少存至本地PDF定位" in row["reason"]
+    assert "缺少联系方式/PDF/原简历直达锚点" in row["reason"]
 
 
 def test_zhaopin_candidate_with_local_pdf_can_enter_ledger(tmp_path):

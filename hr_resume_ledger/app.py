@@ -792,23 +792,19 @@ def has_resume_anchor(row):
 
 
 def backtrack_status(row):
-    if (row or {}).get("pdf_required") and not has_pdf(row):
-        return "缺少存至本地PDF定位"
     if has_contact(row):
         return "可直接沟通"
     if has_pdf(row):
         return "PDF已保存，可从PDF回溯"
     if has_resume_anchor(row):
         return "原简历可直达，可补PDF/联系方式"
+    if (row or {}).get("pdf_required"):
+        return "缺少存至本地PDF、联系方式、原简历直达锚点"
     return "缺少联系方式、PDF、原简历直达锚点"
 
 
 def has_backtrack_anchor(row):
     return has_contact(row) or has_pdf(row) or has_resume_anchor(row)
-
-
-def has_required_pdf(row):
-    return (not (row or {}).get("pdf_required")) or has_pdf(row)
 
 
 def zhaopin_export_current_pdf(ws, candidate=None):
@@ -1059,12 +1055,9 @@ def should_enter_ledger(row):
     if row.get("detail_opened") is False:
         row["reason"] = (row.get("reason") or "") + "；详情未验证，不入有效台账"
         return False
-    if not has_required_pdf(row):
-        extra = ("：" + row.get("pdf_error", "")) if row.get("pdf_error") else ""
-        row["reason"] = (row.get("reason") or "") + "；缺少存至本地PDF定位，不入有效台账" + extra
-        return False
     if not has_backtrack_anchor(row):
-        row["reason"] = (row.get("reason") or "") + "；符合经历但缺少联系方式/PDF/原简历直达锚点，不入有效台账"
+        extra = ("；PDF失败：" + row.get("pdf_error", "")) if row.get("pdf_error") else ""
+        row["reason"] = (row.get("reason") or "") + "；符合经历但缺少联系方式/PDF/原简历直达锚点，不入有效台账" + extra
         return False
     if row.get("matched"):
         row["reason"] = (row.get("reason") or "") + "；" + backtrack_status(row)
