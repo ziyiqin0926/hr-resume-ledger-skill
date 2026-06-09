@@ -810,6 +810,35 @@ def has_backtrack_anchor(row):
     return has_contact(row) or has_pdf(row) or has_resume_anchor(row)
 
 
+def click_zhaopin_save_local_anchor(ws):
+    script = r"""
+(() => {
+  const labels = ['存至本地', '保存到本地', '导出简历', '下载简历'];
+  const nodes = Array.from(document.querySelectorAll('button,a,[role=button],span,div'))
+    .map(el => {
+      const t = (el.innerText || el.textContent || '').trim();
+      const r = el.getBoundingClientRect();
+      const visible = r.width > 20 && r.height > 12 && r.bottom > 0 && r.right > 0;
+      const hit = labels.some(x => t.includes(x));
+      const upperRight = r.top < Math.max(520, window.innerHeight * 0.45) && r.left > window.innerWidth * 0.35;
+      return {el,t,r,visible,hit,upperRight,score:(hit?10:0)+(upperRight?3:0)};
+    })
+    .filter(x => x.visible && x.hit)
+    .sort((a,b) => b.score - a.score || a.r.top - b.r.top || b.r.left - a.r.left);
+  const picked = nodes[0];
+  if (!picked) return JSON.stringify({ok:false, reason:'未找到右侧上方“存至本地”锚点'});
+  const target = picked.el.closest('button,a,[role=button]') || picked.el;
+  target.scrollIntoView({block:'center', inline:'center'});
+  target.click();
+  return JSON.stringify({ok:true, text:picked.t.slice(0,80), top:Math.round(picked.r.top), left:Math.round(picked.r.left)});
+})()
+"""
+    try:
+        return json.loads(eval_page(ws, script, timeout=8) or "{}")
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
+
 def zhaopin_export_current_pdf(ws, candidate=None):
     """Call Zhilian's own '存至本地' PDF flow for the currently opened resume."""
     script = r"""
@@ -1126,6 +1155,8 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
         if platform == "zhaopin":
             prospective = merge_card_detail(candidate, detail)
             try:
+                anchor = click_zhaopin_save_local_anchor(ws)
+                detail["pdf_anchor_status"] = "已定位右上存至本地" if anchor.get("ok") else anchor.get("reason", "")
                 time.sleep(PDF_EXPORT_SETTLE_SECONDS)
                 pdf = zhaopin_export_current_pdf(ws, prospective)
                 if pdf.get("ok"):
@@ -1135,7 +1166,8 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
                         if pdf_contacts.get(k) and not detail.get(k):
                             detail[k] = pdf_contacts[k]
                 else:
-                    detail["pdf_error"] = pdf.get("error", "")
+                    prefix = "" if anchor.get("ok") else (anchor.get("reason", "") + "；")
+                    detail["pdf_error"] = prefix + pdf.get("error", "")
             except Exception as e:
                 detail["pdf_error"] = str(e)
         return detail, ""
@@ -1331,16 +1363,19 @@ def generate_candidate_pdf(cid):
     if not tab:
         raise RuntimeError("未连接受控浏览器，请先打开招聘平台浏览器")
     ws = CdpWebSocket(tab["ws"])
+    pdf, anchor = {}, {"ok": False, "reason": "尚未定位右侧上方存至本地锚点"}
     try:
         ws.call("Page.navigate", {"url": source_url}, timeout=8)
         page = wait_page_changed(ws, "", "", wait_seconds=8)
         wait_resume_detail_ready(ws, page)
+        anchor = click_zhaopin_save_local_anchor(ws)
         time.sleep(PDF_EXPORT_SETTLE_SECONDS)
         pdf = zhaopin_export_current_pdf(ws, row)
     finally:
         ws.close()
     if not pdf.get("ok"):
-        raise RuntimeError(pdf.get("error") or "PDF 生成失败")
+        prefix = "" if anchor.get("ok") else (anchor.get("reason", "") + "；")
+        raise RuntimeError(prefix + (pdf.get("error") or "PDF 生成失败"))
     contacts = extract_contacts_from_pdf(pdf["path"])
     with sqlite3.connect(DB_PATH) as con:
         con.execute("UPDATE candidates SET local_pdf_path=?, resume_key=COALESCE(NULLIF(resume_key,''), ?), phone=COALESCE(NULLIF(?,''), phone), email=COALESCE(NULLIF(?,''), email), wechat=COALESCE(NULLIF(?,''), wechat) WHERE id=?", (pdf["path"], extract_resume_key(source_url), contacts.get("phone", ""), contacts.get("email", ""), contacts.get("wechat", ""), int(cid)))
