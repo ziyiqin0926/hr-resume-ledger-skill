@@ -38,6 +38,9 @@ DEFAULT_COLLECT_LIMIT = 500
 DETAIL_READY_TIMEOUT = float(os.environ.get("HR_LEDGER_DETAIL_READY_TIMEOUT", "20"))
 DETAIL_SWITCH_PAUSE = float(os.environ.get("HR_LEDGER_DETAIL_SWITCH_PAUSE", "1.2"))
 PDF_EXPORT_SETTLE_SECONDS = float(os.environ.get("HR_LEDGER_PDF_EXPORT_SETTLE_SECONDS", "1.6"))
+ZHILIAN_PAGE_SAMPLE_SIZE = int(os.environ.get("HR_LEDGER_ZHILIAN_PAGE_SAMPLE_SIZE", "2"))
+ZHILIAN_ROUND_SIZE = int(os.environ.get("HR_LEDGER_ZHILIAN_ROUND_SIZE", "20"))
+ZHILIAN_ROUNDS = int(os.environ.get("HR_LEDGER_ZHILIAN_ROUNDS", "2"))
 PLATFORMS = {
     "zhaopin": {
         "id": "zhaopin", "name": "智联招聘", "home": "https://rd5.zhaopin.com/",
@@ -869,6 +872,16 @@ def has_backtrack_anchor(row):
     return has_contact(row) or has_pdf(row) or has_resume_anchor(row)
 
 
+def candidate_sampling_key(row):
+    return normalize_resume_line("|".join([
+        row.get("name", ""),
+        row.get("age", ""),
+        row.get("education", ""),
+        row.get("status", ""),
+        (row.get("job_desc", "") or row.get("matched_experience", ""))[:80],
+    ]))
+
+
 def click_zhaopin_save_local_anchor(ws):
     script = r"""
 (() => {
@@ -1349,34 +1362,77 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
             return {"saved": [], "skipped": [{"reason": f"候选人列表未加载完成或识别失败：仅识别到 {len(ready_cards)} 人"}], "match_report": {"total": len(ready_cards), "matched": 0, "percent": 0, "items": ready_cards}, "page_url": page_url}
         cards = extract_recommendation_cards(start_page.get("text", ""), job_keywords)
         if cards:
-            report = build_match_report(cards[:limit], job_keywords)
             progress_items = []
             final_items = []
-            set_progress(run_id, total=len(report["items"]), current=0, message="已识别推荐卡片，准备打开完整简历", items=progress_items, done=False)
-            for idx, cand in enumerate(report["items"], 1):
-                set_progress(run_id, total=len(report["items"]), current=idx, message=f"正在打开完整简历：{cand.get('name','')}", items=progress_items, done=False)
-                time.sleep(DETAIL_SWITCH_PAUSE)
-                detail, err = open_candidate_detail(ws, start_page, cand, job_keywords, p["id"])
-                row = build_final_candidate_decision(cand, detail, job_keywords)
-                row["pdf_required"] = p["id"] == "zhaopin"
-                if not row.get("detail_opened"):
-                    row["source_url"] = ""
-                    row["resume_key"] = ""
+            seen_sample_keys = set()
+            is_zhaopin = p["id"] == "zhaopin"
+            target_limit = min(int(limit or DEFAULT_COLLECT_LIMIT), ZHILIAN_ROUND_SIZE * ZHILIAN_ROUNDS) if is_zhaopin else min(int(limit or DEFAULT_COLLECT_LIMIT), len(cards))
+            max_attempts = max(1, target_limit * 3)
+            attempts = 0
+            processed_in_round = 0
+            round_no = 1
+            set_progress(run_id, total=target_limit, current=0, message=f"采样模式：每页最多 {ZHILIAN_PAGE_SAMPLE_SIZE if is_zhaopin else target_limit} 人，准备打开完整简历", items=progress_items, done=False)
+            while len(final_items) < target_limit and attempts < max_attempts:
+                attempts += 1
+                if is_zhaopin:
+                    if attempts > 1:
+                        ws.call("Page.reload", {"ignoreCache": True}, timeout=6)
+                        time.sleep(2.2)
+                    reset_recommend_scroll(ws)
+                    start_page, _ = read_recommend_page_when_ready(ws, 8)
+                    page_cards = extract_recommendation_cards(start_page.get("text", ""), job_keywords)
+                    page_report = build_match_report(page_cards, job_keywords)
+                    candidates = sorted(page_report["items"], key=lambda x: (bool(x.get("matched")), int(x.get("score") or 0)), reverse=True)
+                    batch = []
+                    for cand in candidates:
+                        key = candidate_sampling_key(cand)
+                        if not key or key in seen_sample_keys:
+                            continue
+                        seen_sample_keys.add(key)
+                        batch.append(cand)
+                        if len(batch) >= ZHILIAN_PAGE_SAMPLE_SIZE:
+                            break
+                    if not batch:
+                        progress_items.append({"name": f"第{attempts}次刷新", "status": "跳过", "reason": "本页没有新的候选人"})
+                        set_progress(run_id, total=target_limit, current=len(final_items), message="刷新推荐页继续采样", items=progress_items, done=False)
+                        continue
                 else:
-                    row["source_url"] = sanitize_source_url(row.get("source_url", ""))
-                row["ledger_included"] = should_enter_ledger(row)
-                final_items.append(row)
-                if row.get("ledger_included"):
-                    cid = save_candidate(row)
-                    saved.append({"id": cid, "name": row.get("name", ""), "phone": row.get("phone", ""), "score": row.get("score", 0), "reason": row.get("reason", ""), "detail_opened": row.get("detail_opened", False), "has_pdf": has_pdf(row), "backtrack_status": backtrack_status(row)})
-                    progress_items.append({"name": row.get("name", ""), "phone": row.get("phone", ""), "status": "已入库｜" + backtrack_status(row), "detail_opened": row.get("detail_opened", False)})
-                    if err:
-                        skipped.append({"name": cand.get("name", ""), "reason": "详情打开失败，已保存推荐页摘要：" + err})
-                else:
-                    reason = err or row.get("reason", "相关职业经历不匹配")
-                    skipped.append({"name": cand.get("name", ""), "reason": reason})
-                    progress_items.append({"name": cand.get("name", ""), "status": "不入库", "reason": reason, "detail_opened": row.get("detail_opened", False)})
-                set_progress(run_id, total=len(report["items"]), current=idx, message=f"已处理：{cand.get('name','')}", items=progress_items, done=False)
+                    page_report = build_match_report(cards[:target_limit], job_keywords)
+                    batch = [x for x in page_report["items"] if candidate_sampling_key(x) not in seen_sample_keys]
+                    seen_sample_keys.update(candidate_sampling_key(x) for x in batch)
+                for cand in batch:
+                    if len(final_items) >= target_limit:
+                        break
+                    idx = len(final_items) + 1
+                    set_progress(run_id, total=target_limit, current=idx, message=f"第{round_no}轮采样，正在打开完整简历：{cand.get('name','')}", items=progress_items, done=False)
+                    time.sleep(DETAIL_SWITCH_PAUSE)
+                    detail, err = open_candidate_detail(ws, start_page, cand, job_keywords, p["id"])
+                    row = build_final_candidate_decision(cand, detail, job_keywords)
+                    row["pdf_required"] = p["id"] == "zhaopin"
+                    if not row.get("detail_opened"):
+                        row["source_url"] = ""
+                        row["resume_key"] = ""
+                    else:
+                        row["source_url"] = sanitize_source_url(row.get("source_url", ""))
+                    row["ledger_included"] = should_enter_ledger(row)
+                    final_items.append(row)
+                    if row.get("ledger_included"):
+                        cid = save_candidate(row)
+                        saved.append({"id": cid, "name": row.get("name", ""), "phone": row.get("phone", ""), "score": row.get("score", 0), "reason": row.get("reason", ""), "detail_opened": row.get("detail_opened", False), "has_pdf": has_pdf(row), "backtrack_status": backtrack_status(row)})
+                        progress_items.append({"name": row.get("name", ""), "phone": row.get("phone", ""), "status": f"第{round_no}轮已入库｜" + backtrack_status(row), "detail_opened": row.get("detail_opened", False)})
+                        if err:
+                            skipped.append({"name": cand.get("name", ""), "reason": "详情打开失败，已保存推荐页摘要：" + err})
+                    else:
+                        reason = err or row.get("reason", "相关职业经历不匹配")
+                        skipped.append({"name": cand.get("name", ""), "reason": reason})
+                        progress_items.append({"name": cand.get("name", ""), "status": f"第{round_no}轮不入库", "reason": reason, "detail_opened": row.get("detail_opened", False)})
+                    processed_in_round += 1
+                    if is_zhaopin and processed_in_round >= ZHILIAN_ROUND_SIZE:
+                        round_no += 1
+                        processed_in_round = 0
+                    set_progress(run_id, total=target_limit, current=len(final_items), message=f"已处理：{cand.get('name','')}", items=progress_items, done=False)
+                if not is_zhaopin:
+                    break
             included_count = sum(1 for x in final_items if x.get("ledger_included"))
             final_report = {"total": len(final_items), "matched": included_count, "percent": round(100 * included_count / len(final_items)) if final_items else 0, "items": final_items}
             set_progress(run_id, total=len(final_items), current=len(final_items), message=f"采集完成：入库 {len(saved)} 人", items=progress_items, done=True)
