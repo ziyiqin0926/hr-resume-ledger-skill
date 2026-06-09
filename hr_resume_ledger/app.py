@@ -792,6 +792,8 @@ def has_resume_anchor(row):
 
 
 def backtrack_status(row):
+    if (row or {}).get("pdf_required") and not has_pdf(row):
+        return "缺少存至本地PDF定位"
     if has_contact(row):
         return "可直接沟通"
     if has_pdf(row):
@@ -803,6 +805,10 @@ def backtrack_status(row):
 
 def has_backtrack_anchor(row):
     return has_contact(row) or has_pdf(row) or has_resume_anchor(row)
+
+
+def has_required_pdf(row):
+    return (not (row or {}).get("pdf_required")) or has_pdf(row)
 
 
 def zhaopin_export_current_pdf(ws, candidate=None):
@@ -1027,7 +1033,7 @@ def merge_card_detail(card, detail):
     row = dict(card)
     for key in ["name", "phone", "email", "wechat", "education", "age", "age_years", "gender", "basic_info", "status", "job_desc", "matched_experience"]:
         row[key] = detail.get(key) or row.get(key, "")
-    for key in ["resume", "raw_text", "source_url", "source_title", "resume_key", "local_pdf_path"]:
+    for key in ["resume", "raw_text", "source_url", "source_title", "resume_key", "local_pdf_path", "pdf_error", "pdf_required"]:
         if detail.get(key):
             row[key] = detail.get(key)
     row["detail_opened"] = True
@@ -1052,6 +1058,10 @@ def should_enter_ledger(row):
         return False
     if row.get("detail_opened") is False:
         row["reason"] = (row.get("reason") or "") + "；详情未验证，不入有效台账"
+        return False
+    if not has_required_pdf(row):
+        extra = ("：" + row.get("pdf_error", "")) if row.get("pdf_error") else ""
+        row["reason"] = (row.get("reason") or "") + "；缺少存至本地PDF定位，不入有效台账" + extra
         return False
     if not has_backtrack_anchor(row):
         row["reason"] = (row.get("reason") or "") + "；符合经历但缺少联系方式/PDF/原简历直达锚点，不入有效台账"
@@ -1086,21 +1096,21 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
         detail["source_url"] = page.get("url", "")
         detail["source_title"] = page.get("title", "")
         detail["resume_key"] = extract_resume_key(page.get("url", ""))
+        detail["pdf_required"] = platform == "zhaopin"
         if platform == "zhaopin":
             prospective = merge_card_detail(candidate, detail)
-            if candidate.get("matched") or semantic_match_score(prospective, job_keywords).get("matched"):
-                try:
-                    pdf = zhaopin_export_current_pdf(ws, prospective)
-                    if pdf.get("ok"):
-                        detail["local_pdf_path"] = pdf.get("path", "")
-                        pdf_contacts = extract_contacts_from_pdf(pdf.get("path", ""))
-                        for k in ["phone", "email", "wechat"]:
-                            if pdf_contacts.get(k) and not detail.get(k):
-                                detail[k] = pdf_contacts[k]
-                    else:
-                        detail["pdf_error"] = pdf.get("error", "")
-                except Exception as e:
-                    detail["pdf_error"] = str(e)
+            try:
+                pdf = zhaopin_export_current_pdf(ws, prospective)
+                if pdf.get("ok"):
+                    detail["local_pdf_path"] = pdf.get("path", "")
+                    pdf_contacts = extract_contacts_from_pdf(pdf.get("path", ""))
+                    for k in ["phone", "email", "wechat"]:
+                        if pdf_contacts.get(k) and not detail.get(k):
+                            detail[k] = pdf_contacts[k]
+                else:
+                    detail["pdf_error"] = pdf.get("error", "")
+            except Exception as e:
+                detail["pdf_error"] = str(e)
         return detail, ""
     except Exception as e:
         return None, str(e)
@@ -1195,6 +1205,7 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
                 set_progress(run_id, total=len(report["items"]), current=idx, message=f"正在打开完整简历：{cand.get('name','')}", items=progress_items, done=False)
                 detail, err = open_candidate_detail(ws, start_page, cand, job_keywords, p["id"])
                 row = build_final_candidate_decision(cand, detail, job_keywords)
+                row["pdf_required"] = p["id"] == "zhaopin"
                 if not row.get("detail_opened"):
                     row["source_url"] = ""
                     row["resume_key"] = ""
@@ -1237,6 +1248,7 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
                     continue
                 cand["source_url"] = ""
                 cand["detail_opened"] = False
+                cand["pdf_required"] = p["id"] == "zhaopin"
                 cand["work_trace"] = json.dumps(build_trace(cand, job_keywords, ""), ensure_ascii=False)
                 if should_enter_ledger(cand):
                     cid = save_candidate(cand)
@@ -1252,6 +1264,7 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
                 cand = extract_candidate(page, job_keywords)
                 cand["source_url"] = sanitize_source_url(page.get("url", ""))
                 cand["detail_opened"] = True
+                cand["pdf_required"] = p["id"] == "zhaopin"
                 cand.update(semantic_match_score(cand, job_keywords))
                 if should_enter_ledger(cand):
                     cid = save_candidate(cand)

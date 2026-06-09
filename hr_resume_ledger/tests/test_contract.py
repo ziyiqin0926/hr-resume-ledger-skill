@@ -117,6 +117,37 @@ def test_zhaopin_resume_url_is_backtrack_anchor():
     assert "原简历可直达" in row["reason"]
 
 
+def test_zhaopin_candidate_requires_local_pdf_before_ledger():
+    row = {
+        "matched": True,
+        "score": 80,
+        "matched_experience": "做过建筑方案设计",
+        "detail_opened": True,
+        "reason": "",
+        "pdf_required": True,
+        "source_url": "https://rd6.zhaopin.com/app/recommend?jobNumber=J1&resumeNumber=R1",
+    }
+    assert app.should_enter_ledger(row) is False
+    assert "缺少存至本地PDF定位" in row["reason"]
+
+
+def test_zhaopin_candidate_with_local_pdf_can_enter_ledger(tmp_path):
+    pdf = tmp_path / "resume.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    row = {
+        "matched": True,
+        "score": 80,
+        "matched_experience": "做过建筑方案设计",
+        "detail_opened": True,
+        "reason": "",
+        "pdf_required": True,
+        "local_pdf_path": str(pdf),
+        "source_url": "https://rd6.zhaopin.com/app/recommend?jobNumber=J1&resumeNumber=R1",
+    }
+    assert app.should_enter_ledger(row) is True
+    assert "PDF已保存" in row["reason"]
+
+
 def test_resume_text_dedupes_repeated_paragraphs():
     text = "工作经历\nA公司\n负责建筑方案设计\n负责建筑方案设计\n教育经历\nA公司\n负责建筑方案设计"
     cleaned = app.dedupe_resume_text(text)
