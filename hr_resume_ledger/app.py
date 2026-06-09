@@ -34,6 +34,9 @@ APP_HOST = os.environ.get("HR_LEDGER_HOST", os.environ.get("APP_HOST", "127.0.0.
 APP_PORT = int(os.environ.get("HR_LEDGER_PORT", os.environ.get("APP_PORT", "8765")))
 CDP_PORT = int(os.environ.get("HR_LEDGER_CDP_PORT", "9222"))
 DEFAULT_COLLECT_LIMIT = 500
+DETAIL_READY_TIMEOUT = float(os.environ.get("HR_LEDGER_DETAIL_READY_TIMEOUT", "12"))
+DETAIL_SWITCH_PAUSE = float(os.environ.get("HR_LEDGER_DETAIL_SWITCH_PAUSE", "1.2"))
+PDF_EXPORT_SETTLE_SECONDS = float(os.environ.get("HR_LEDGER_PDF_EXPORT_SETTLE_SECONDS", "1.6"))
 PLATFORMS = {
     "zhaopin": {
         "id": "zhaopin", "name": "智联招聘", "home": "https://rd5.zhaopin.com/",
@@ -811,6 +814,7 @@ def zhaopin_export_current_pdf(ws, candidate=None):
     """Call Zhilian's own '存至本地' PDF flow for the currently opened resume."""
     script = r"""
 (async () => {
+  await new Promise(r => setTimeout(r, 1200));
   const perf = performance.getEntriesByType('resource').map(x => x.name).reverse();
   const api = perf.find(u => u.includes('/api/resume/createExportTask')) || perf.find(u => u.includes('/api/resume/')) || location.href;
   const u = new URL(api, location.href);
@@ -875,6 +879,32 @@ PAGE_SCRIPT = r"""
 def read_current_page(ws):
     value = eval_page(ws, PAGE_SCRIPT)
     return json.loads(value or "{}")
+
+
+def resume_detail_ready(page):
+    url = page.get("url", "") or ""
+    text = page.get("text", "") or ""
+    if "zhaopin.com" in url and not extract_resume_key(url):
+        return False
+    markers = ["存至本地", "保存到本地", "工作经历", "求职期望", "教育经历", "个人优势", "完整简历"]
+    return len(text) >= 800 and any(m in text for m in markers)
+
+
+def wait_resume_detail_ready(ws, first_page=None, wait_seconds=DETAIL_READY_TIMEOUT):
+    page = first_page or {}
+    end = time.time() + max(1, float(wait_seconds or DETAIL_READY_TIMEOUT))
+    while time.time() < end:
+        try:
+            current = read_current_page(ws)
+            if current.get("text") or current.get("url"):
+                page = current
+            if resume_detail_ready(page):
+                time.sleep(PDF_EXPORT_SETTLE_SECONDS)
+                return read_current_page(ws)
+        except Exception:
+            pass
+        time.sleep(0.7)
+    return page
 
 
 def read_recommend_page_when_ready(ws, wait_seconds=8):
@@ -1083,6 +1113,7 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
             if not clicked.get("ok"):
                 return None, clicked.get("error") or "未找到可点击的候选人卡片"
         page = wait_page_changed(ws, start_url, start_text)
+        page = wait_resume_detail_ready(ws, page)
         detail = extract_candidate(page, job_keywords)
         if not detail_matches_card(candidate, detail):
             return None, f"详情页疑似打开到其他候选人：卡片 {candidate.get('name','')} {candidate.get('age','')}岁 {candidate.get('education','')}，详情 {detail.get('name','')} {detail.get('age','')}岁 {detail.get('education','')}"
@@ -1093,6 +1124,7 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
         if platform == "zhaopin":
             prospective = merge_card_detail(candidate, detail)
             try:
+                time.sleep(PDF_EXPORT_SETTLE_SECONDS)
                 pdf = zhaopin_export_current_pdf(ws, prospective)
                 if pdf.get("ok"):
                     detail["local_pdf_path"] = pdf.get("path", "")
@@ -1112,6 +1144,7 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
             if start_url:
                 ws.call("Page.navigate", {"url": start_url}, timeout=5)
                 read_recommend_page_when_ready(ws, 4)
+                time.sleep(DETAIL_SWITCH_PAUSE)
         except Exception:
             pass
 
@@ -1196,6 +1229,7 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
             set_progress(run_id, total=len(report["items"]), current=0, message="已识别推荐卡片，准备打开完整简历", items=progress_items, done=False)
             for idx, cand in enumerate(report["items"], 1):
                 set_progress(run_id, total=len(report["items"]), current=idx, message=f"正在打开完整简历：{cand.get('name','')}", items=progress_items, done=False)
+                time.sleep(DETAIL_SWITCH_PAUSE)
                 detail, err = open_candidate_detail(ws, start_page, cand, job_keywords, p["id"])
                 row = build_final_candidate_decision(cand, detail, job_keywords)
                 row["pdf_required"] = p["id"] == "zhaopin"
@@ -1297,7 +1331,9 @@ def generate_candidate_pdf(cid):
     ws = CdpWebSocket(tab["ws"])
     try:
         ws.call("Page.navigate", {"url": source_url}, timeout=8)
-        wait_page_changed(ws, "", "", wait_seconds=8)
+        page = wait_page_changed(ws, "", "", wait_seconds=8)
+        wait_resume_detail_ready(ws, page)
+        time.sleep(PDF_EXPORT_SETTLE_SECONDS)
         pdf = zhaopin_export_current_pdf(ws, row)
     finally:
         ws.close()

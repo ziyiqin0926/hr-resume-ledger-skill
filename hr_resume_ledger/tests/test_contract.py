@@ -187,6 +187,16 @@ def test_sync_candidate_pdfs_uses_zhaopin_resume_link(tmp_path, monkeypatch):
     assert app.list_candidates()[0]["has_pdf"] is True
 
 
+def test_resume_detail_ready_requires_resume_key_and_resume_content():
+    page = {
+        "url": "https://rd6.zhaopin.com/app/recommend?jobNumber=J1&resumeNumber=R1",
+        "text": "存至本地\n工作经历\n" + ("负责客户沟通和项目交付\n" * 80),
+    }
+    assert app.resume_detail_ready(page) is True
+    bad = dict(page, url="https://rd6.zhaopin.com/app/recommend")
+    assert app.resume_detail_ready(bad) is False
+
+
 def test_resume_text_dedupes_repeated_paragraphs():
     text = "工作经历\nA公司\n负责建筑方案设计\n负责建筑方案设计\n教育经历\nA公司\n负责建筑方案设计"
     cleaned = app.dedupe_resume_text(text)
