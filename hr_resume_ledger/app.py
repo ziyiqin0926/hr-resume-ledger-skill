@@ -1309,6 +1309,30 @@ def generate_candidate_pdf(cid):
     return {"ok": True, "id": int(cid), "local_pdf_path": pdf["path"]}
 
 
+def sync_candidate_pdfs(limit=200):
+    rows = list_candidates()
+    items, synced, failed, skipped = [], 0, 0, 0
+    for row in rows[: max(1, int(limit or 200))]:
+        name = row.get("name", "") or f"候选人{row.get('id')}"
+        if has_pdf(row):
+            skipped += 1
+            items.append({"id": row.get("id"), "name": name, "status": "已有PDF"})
+            continue
+        source_url = row.get("source_url", "") or ""
+        if "zhaopin.com" not in source_url or not extract_resume_key(source_url):
+            skipped += 1
+            items.append({"id": row.get("id"), "name": name, "status": "跳过", "reason": "缺少智联原简历链接"})
+            continue
+        try:
+            res = generate_candidate_pdf(row.get("id"))
+            synced += 1
+            items.append({"id": row.get("id"), "name": name, "status": "PDF已同步", "path": res.get("local_pdf_path", "")})
+        except Exception as e:
+            failed += 1
+            items.append({"id": row.get("id"), "name": name, "status": "PDF同步失败", "reason": str(e)})
+    return {"ok": True, "synced": synced, "failed": failed, "skipped": skipped, "items": items}
+
+
 def dedupe_candidates():
     rows = list_candidates()
     seen, delete_ids = set(), []
@@ -1559,6 +1583,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": clear_candidates()})
             elif path == "/api/generate-candidate-pdf":
                 self.send_json(generate_candidate_pdf(body.get("id")))
+            elif path == "/api/sync-candidate-pdfs":
+                self.send_json(sync_candidate_pdfs(int(body.get("limit", 200))))
             elif path == "/api/dedupe-candidates":
                 self.send_json(dedupe_candidates())
             else:

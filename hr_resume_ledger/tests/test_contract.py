@@ -161,6 +161,32 @@ def test_zhaopin_candidate_with_local_pdf_can_enter_ledger(tmp_path):
     assert "PDF已保存" in row["reason"]
 
 
+def test_sync_candidate_pdfs_uses_zhaopin_resume_link(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DB_PATH", tmp_path / "x.sqlite3")
+    monkeypatch.setattr(app, "PDF_DIR", tmp_path / "resume_pdfs")
+    app.PDF_DIR.mkdir()
+    app.init_db()
+    cid = app.save_candidate({
+        "name": "张先生",
+        "phone": "13800138000",
+        "resume": "建筑方案设计",
+        "source_url": "https://rd6.zhaopin.com/app/recommend?jobNumber=J1&resumeNumber=R1",
+    })
+    pdf = app.PDF_DIR / "张先生.pdf"
+
+    def fake_generate(row_id):
+        assert row_id == cid
+        pdf.write_bytes(b"%PDF-1.4\n")
+        with app.sqlite3.connect(app.DB_PATH) as con:
+            con.execute("UPDATE candidates SET local_pdf_path=? WHERE id=?", (str(pdf), row_id))
+        return {"ok": True, "id": row_id, "local_pdf_path": str(pdf)}
+
+    monkeypatch.setattr(app, "generate_candidate_pdf", fake_generate)
+    result = app.sync_candidate_pdfs()
+    assert result["synced"] == 1
+    assert app.list_candidates()[0]["has_pdf"] is True
+
+
 def test_resume_text_dedupes_repeated_paragraphs():
     text = "工作经历\nA公司\n负责建筑方案设计\n负责建筑方案设计\n教育经历\nA公司\n负责建筑方案设计"
     cleaned = app.dedupe_resume_text(text)
