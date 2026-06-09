@@ -1,4 +1,5 @@
 ﻿import base64
+import ctypes
 import csv
 import json
 import os
@@ -34,7 +35,7 @@ APP_HOST = os.environ.get("HR_LEDGER_HOST", os.environ.get("APP_HOST", "127.0.0.
 APP_PORT = int(os.environ.get("HR_LEDGER_PORT", os.environ.get("APP_PORT", "8765")))
 CDP_PORT = int(os.environ.get("HR_LEDGER_CDP_PORT", "9222"))
 DEFAULT_COLLECT_LIMIT = 500
-DETAIL_READY_TIMEOUT = float(os.environ.get("HR_LEDGER_DETAIL_READY_TIMEOUT", "12"))
+DETAIL_READY_TIMEOUT = float(os.environ.get("HR_LEDGER_DETAIL_READY_TIMEOUT", "20"))
 DETAIL_SWITCH_PAUSE = float(os.environ.get("HR_LEDGER_DETAIL_SWITCH_PAUSE", "1.2"))
 PDF_EXPORT_SETTLE_SECONDS = float(os.environ.get("HR_LEDGER_PDF_EXPORT_SETTLE_SECONDS", "1.6"))
 PLATFORMS = {
@@ -160,6 +161,64 @@ def set_progress(run_id="default", **data):
 
 def get_progress(run_id="default"):
     return PROGRESS.get(run_id or "default", {"total": 0, "current": 0, "message": "", "items": [], "done": False})
+
+
+def restore_browser_windows():
+    if os.name != "nt":
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        matches = []
+        enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def callback(hwnd, _):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            title = buf.value
+            if any(k in title for k in ["Google Chrome", "Cent Browser", "智联招聘", "招聘平台候选人采集台账"]):
+                matches.append(hwnd)
+            return True
+
+        user32.EnumWindows(enum_proc(callback), 0)
+        for hwnd in matches:
+            user32.ShowWindowAsync(hwnd, 9)
+            user32.SetForegroundWindow(hwnd)
+        return bool(matches)
+    except Exception:
+        return False
+
+
+def bring_tab_to_front(ws):
+    try:
+        ws.call("Page.bringToFront", {}, timeout=3)
+    except Exception:
+        pass
+
+
+def reset_recommend_scroll(ws):
+    script = r"""
+(() => {
+  const sels = ['.recommend-list__left', '.recommend-list', '.page-view__content', '.app-main'];
+  let touched = 0;
+  for (const sel of sels) {
+    for (const el of document.querySelectorAll(sel)) {
+      if (el && el.scrollHeight > el.clientHeight) {
+        el.scrollTop = 0;
+        touched++;
+      }
+    }
+  }
+  try { window.scrollTo(0, 0); } catch(e) {}
+  return JSON.stringify({ok:true, touched});
+})()
+"""
+    try:
+        return json.loads(eval_page(ws, script, timeout=5) or "{}")
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
 
 
 def extract_contacts(text):
@@ -813,7 +872,7 @@ def has_backtrack_anchor(row):
 def click_zhaopin_save_local_anchor(ws):
     script = r"""
 (() => {
-  const labels = ['存至本地', '保存到本地', '导出简历', '下载简历'];
+  const labels = ['存至本地', '保存到本地', '导出简历', '下载简历', '要附件简历'];
   const nodes = Array.from(document.querySelectorAll('button,a,[role=button],span,div'))
     .map(el => {
       const t = (el.innerText || el.textContent || '').trim();
@@ -912,15 +971,23 @@ def zhaopin_export_current_pdf(ws, candidate=None):
     return {"ok": True, "path": str(path), "url": file_url, "resumeNumber": info.get("resumeNumber"), "jobNumber": info.get("jobNumber")}
 
 PAGE_SCRIPT = r"""
-(() => JSON.stringify({
-  title: document.title || '',
-  url: location.href || '',
-  text: (document.body && document.body.innerText ? document.body.innerText : '').slice(0, 60000),
-  links: Array.from(document.querySelectorAll('a[href]')).map(a => ({
-    href: a.href,
-    text: (a.innerText || a.textContent || '').trim().slice(0, 120)
-  })).filter(x => x.href).slice(0, 1000)
-}))()
+(() => {
+  const bodyText = document.body && document.body.innerText ? document.body.innerText : '';
+  const detailText = Array.from(document.querySelectorAll('.resume-basic-new,[class*="resume-detail"],[class*="resume-basic"],[class*="resume-content"],[class*="resume-section"],[class*="attach-resume"]'))
+    .map(el => (el.innerText || el.textContent || '').trim())
+    .filter(Boolean)
+    .join('\n');
+  return JSON.stringify({
+    title: document.title || '',
+    url: location.href || '',
+    text: (bodyText + '\n' + detailText).slice(0, 80000),
+    detail_text: detailText.slice(0, 60000),
+    links: Array.from(document.querySelectorAll('a[href]')).map(a => ({
+      href: a.href,
+      text: (a.innerText || a.textContent || '').trim().slice(0, 120)
+    })).filter(x => x.href).slice(0, 1000)
+  });
+})()
 """
 
 
@@ -931,8 +998,8 @@ def read_current_page(ws):
 
 def resume_detail_ready(page):
     text = page.get("text", "") or ""
-    action_markers = ["存至本地", "保存到本地", "导出简历", "下载简历"]
-    resume_markers = ["工作经历", "求职期望", "教育经历", "个人优势", "完整简历"]
+    action_markers = ["存至本地", "保存到本地", "导出简历", "下载简历", "要附件简历"]
+    resume_markers = ["工作经历", "求职期望", "教育经历", "个人优势", "完整简历", "现居", "户口"]
     return len(text) >= 800 and any(m in text for m in action_markers) and any(m in text for m in resume_markers)
 
 
@@ -1029,6 +1096,7 @@ def click_candidate_by_name(ws, name, occurrence=0):
   for (const el of nodes) {{
     const r = el.getBoundingClientRect();
     if (r.width < 20 || r.height < 10) continue;
+    if (r.top < 0 || r.top > window.innerHeight - 80) continue;
     if (uniq.some(x => Math.abs(x.getBoundingClientRect().top - r.top) < 6)) continue;
     uniq.push(el);
   }}
@@ -1070,7 +1138,7 @@ def click_candidate_card(ws, candidate):
       const score = (must.every(k => t.includes(k)) ? 3 : -99) + keys.reduce((n,k) => n + (t.includes(k) ? 1 : 0), 0);
       return {{el,t,r,score}};
     }})
-    .filter(x => x.score >= 3 && x.t.length < 1800 && x.r.width > 80 && x.r.height > 40)
+    .filter(x => x.score >= 3 && x.t.length < 1800 && x.r.width > 80 && x.r.height > 40 && x.r.top >= 0 && x.r.top < window.innerHeight - 80)
     .sort((a,b) => b.score - a.score || a.t.length - b.t.length || a.r.top - b.r.top);
   const picked = nodes[0];
   if (!picked) return JSON.stringify({{ok:false, reason:'未找到字段匹配的候选人卡片'}});
@@ -1146,6 +1214,8 @@ def should_enter_ledger(row):
 
 
 def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zhaopin"):
+    restore_browser_windows()
+    bring_tab_to_front(ws)
     start_url = start_page.get("url", "")
     start_text = start_page.get("text", "")
     href = find_candidate_href(start_page, candidate, platform)
@@ -1195,6 +1265,7 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
             if start_url:
                 ws.call("Page.navigate", {"url": start_url}, timeout=5)
                 read_recommend_page_when_ready(ws, 4)
+                reset_recommend_scroll(ws)
                 time.sleep(DETAIL_SWITCH_PAUSE)
         except Exception:
             pass
@@ -1255,6 +1326,7 @@ def clear_candidates():
 def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LIMIT, run_id="default", platform="zhaopin"):
     p = get_platform(platform)
     set_progress(run_id, total=0, current=0, message=f"开始寻找{p['name']}页面", items=[], done=False)
+    restore_browser_windows()
     if not ws_url:
         tab = find_recommend_tab(p["id"])
         if not tab:
@@ -1262,8 +1334,11 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
             return {"saved": [], "skipped": [{"reason": f"未找到{p['name']}页面，请先打开对应招聘平台候选人/推荐页"}], "match_report": {"total": 0, "matched": 0, "percent": 0, "items": []}, "page_url": ""}
         ws_url = tab["ws"]
     ws = CdpWebSocket(ws_url)
+    bring_tab_to_front(ws)
     saved, skipped = [], []
     try:
+        start_page, ready_cards = read_recommend_page_when_ready(ws)
+        reset_recommend_scroll(ws)
         start_page, ready_cards = read_recommend_page_when_ready(ws)
         page_url = start_page.get("url", "")
         if not platform_matches_url(p["id"], page_url):
@@ -1379,7 +1454,9 @@ def generate_candidate_pdf(cid):
     tab = find_recommend_tab("zhaopin") or (cdp_tabs()[0] if cdp_tabs() else None)
     if not tab:
         raise RuntimeError("未连接受控浏览器，请先打开招聘平台浏览器")
+    restore_browser_windows()
     ws = CdpWebSocket(tab["ws"])
+    bring_tab_to_front(ws)
     pdf, anchor = {}, {"ok": False, "reason": "尚未定位右侧上方存至本地锚点"}
     try:
         ws.call("Page.navigate", {"url": source_url}, timeout=8)
@@ -1741,3 +1818,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
