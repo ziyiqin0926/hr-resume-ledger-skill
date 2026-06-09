@@ -187,13 +187,13 @@ def test_sync_candidate_pdfs_uses_zhaopin_resume_link(tmp_path, monkeypatch):
     assert app.list_candidates()[0]["has_pdf"] is True
 
 
-def test_resume_detail_ready_requires_resume_key_and_resume_content():
+def test_resume_detail_ready_accepts_save_local_anchor_without_resume_key():
     page = {
-        "url": "https://rd6.zhaopin.com/app/recommend?jobNumber=J1&resumeNumber=R1",
+        "url": "https://rd6.zhaopin.com/app/recommend",
         "text": "存至本地\n工作经历\n" + ("负责客户沟通和项目交付\n" * 80),
     }
     assert app.resume_detail_ready(page) is True
-    bad = dict(page, url="https://rd6.zhaopin.com/app/recommend")
+    bad = dict(page, text="工作经历\n" + ("负责客户沟通和项目交付\n" * 80))
     assert app.resume_detail_ready(bad) is False
 
 

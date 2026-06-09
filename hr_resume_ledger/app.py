@@ -845,14 +845,33 @@ def zhaopin_export_current_pdf(ws, candidate=None):
 (async () => {
   await new Promise(r => setTimeout(r, 1200));
   const perf = performance.getEntriesByType('resource').map(x => x.name).reverse();
+  const hrefs = Array.from(document.querySelectorAll('a[href]')).map(a => a.href).filter(Boolean);
+  const sources = [location.href, ...perf, ...hrefs].filter(Boolean);
+  const firstParam = (names) => {
+    for (const src of sources) {
+      try {
+        const u = new URL(src, location.href);
+        for (const n of names) {
+          const v = u.searchParams.get(n);
+          if (v) return v;
+        }
+      } catch(e) {}
+    }
+    const text = document.body && document.body.innerText ? document.body.innerText : '';
+    for (const n of names) {
+      const m = text.match(new RegExp(n + '[:=：\\s]+([A-Za-z0-9_-]{6,})', 'i'));
+      if (m) return m[1];
+    }
+    return '';
+  };
   const api = perf.find(u => u.includes('/api/resume/createExportTask')) || perf.find(u => u.includes('/api/resume/')) || location.href;
   const u = new URL(api, location.href);
   const loc = new URL(location.href);
   const pageReq = u.searchParams.get('x-zp-page-request-id') || '';
   const clientId = u.searchParams.get('x-zp-client-id') || '';
-  const jobNumber = loc.searchParams.get('jobNumber') || '';
-  const resumeNumber = loc.searchParams.get('resumeNumber') || '';
-  if (!jobNumber || !resumeNumber) return JSON.stringify({ok:false, error:'缺少 jobNumber/resumeNumber', url: location.href});
+  const jobNumber = loc.searchParams.get('jobNumber') || firstParam(['jobNumber','jobNo','jobId']);
+  const resumeNumber = loc.searchParams.get('resumeNumber') || firstParam(['resumeNumber','resumeNo','resumeId']);
+  if (!jobNumber || !resumeNumber) return JSON.stringify({ok:false, error:'缺少 jobNumber/resumeNumber，已尝试从地址栏、页面链接和资源请求反查', url: location.href, checked: sources.slice(0, 12)});
   const query = () => new URLSearchParams({'_': Date.now(), 'x-zp-page-request-id': pageReq, 'x-zp-client-id': clientId}).toString();
   const taskResp = await fetch('/api/resume/createExportTask?' + query(), {
     method:'POST',
@@ -911,12 +930,10 @@ def read_current_page(ws):
 
 
 def resume_detail_ready(page):
-    url = page.get("url", "") or ""
     text = page.get("text", "") or ""
-    if "zhaopin.com" in url and not extract_resume_key(url):
-        return False
-    markers = ["存至本地", "保存到本地", "工作经历", "求职期望", "教育经历", "个人优势", "完整简历"]
-    return len(text) >= 800 and any(m in text for m in markers)
+    action_markers = ["存至本地", "保存到本地", "导出简历", "下载简历"]
+    resume_markers = ["工作经历", "求职期望", "教育经历", "个人优势", "完整简历"]
+    return len(text) >= 800 and any(m in text for m in action_markers) and any(m in text for m in resume_markers)
 
 
 def wait_resume_detail_ready(ws, first_page=None, wait_seconds=DETAIL_READY_TIMEOUT):
@@ -1144,7 +1161,7 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
         page = wait_page_changed(ws, start_url, start_text)
         page = wait_resume_detail_ready(ws, page)
         if platform == "zhaopin" and not resume_detail_ready(page):
-            return None, "详情页未稳定打开：未检测到 resumeNumber/存至本地/工作经历等完整简历标志"
+            return None, "详情页未稳定打开：未检测到右上存至本地和工作经历等完整简历标志"
         detail = extract_candidate(page, job_keywords)
         if not detail_matches_card(candidate, detail):
             return None, f"详情页疑似打开到其他候选人：卡片 {candidate.get('name','')} {candidate.get('age','')}岁 {candidate.get('education','')}，详情 {detail.get('name','')} {detail.get('age','')}岁 {detail.get('education','')}"
