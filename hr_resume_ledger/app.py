@@ -1024,7 +1024,7 @@ def click_candidate_card(ws, candidate):
       const score = (must.every(k => t.includes(k)) ? 3 : -99) + keys.reduce((n,k) => n + (t.includes(k) ? 1 : 0), 0);
       return {{el,t,r,score}};
     }})
-    .filter(x => x.score >= 5 && x.t.length < 1800 && x.r.width > 80 && x.r.height > 40)
+    .filter(x => x.score >= 3 && x.t.length < 1800 && x.r.width > 80 && x.r.height > 40)
     .sort((a,b) => b.score - a.score || a.t.length - b.t.length || a.r.top - b.r.top);
   const picked = nodes[0];
   if (!picked) return JSON.stringify({{ok:false, reason:'未找到字段匹配的候选人卡片'}});
@@ -1114,6 +1114,8 @@ def open_candidate_detail(ws, start_page, candidate, job_keywords, platform="zha
                 return None, clicked.get("error") or "未找到可点击的候选人卡片"
         page = wait_page_changed(ws, start_url, start_text)
         page = wait_resume_detail_ready(ws, page)
+        if platform == "zhaopin" and not resume_detail_ready(page):
+            return None, "详情页未稳定打开：未检测到 resumeNumber/存至本地/工作经历等完整简历标志"
         detail = extract_candidate(page, job_keywords)
         if not detail_matches_card(candidate, detail):
             return None, f"详情页疑似打开到其他候选人：卡片 {candidate.get('name','')} {candidate.get('age','')}岁 {candidate.get('education','')}，详情 {detail.get('name','')} {detail.get('age','')}岁 {detail.get('education','')}"
@@ -1249,7 +1251,7 @@ def collect_recommendations(ws_url="", job_keywords="", limit=DEFAULT_COLLECT_LI
                 else:
                     reason = err or row.get("reason", "相关职业经历不匹配")
                     skipped.append({"name": cand.get("name", ""), "reason": reason})
-                    progress_items.append({"name": cand.get("name", ""), "status": "不入库", "reason": reason})
+                    progress_items.append({"name": cand.get("name", ""), "status": "不入库", "reason": reason, "detail_opened": row.get("detail_opened", False)})
                 set_progress(run_id, total=len(report["items"]), current=idx, message=f"已处理：{cand.get('name','')}", items=progress_items, done=False)
             included_count = sum(1 for x in final_items if x.get("ledger_included"))
             final_report = {"total": len(final_items), "matched": included_count, "percent": round(100 * included_count / len(final_items)) if final_items else 0, "items": final_items}
